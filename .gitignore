@@ -1,0 +1,43 @@
+# macOS
+.DS_Store
+
+# .env files
+.env
+.env.local
+.env.*.local
+
+# Claude Code local configuration
+.claude/
+
+# OpenClaw runtime data (contains secrets, workspace, and config)
+# Keep directory structure but ignore all contents except .gitkeep and openclaw.json template
+openclaw-data/**/*
+!openclaw-data/.gitkeep
+!openclaw-data/config/
+!openclaw-data/config/.gitkeep
+!openclaw-data/config/.openclaw/
+!openclaw-data/config/.openclaw/openclaw.json
+!openclaw-data/workspace/
+!openclaw-data/workspace/.gitkeep
+!openclaw-data/pomerium-ssh/
+!openclaw-data/pomerium-ssh/.gitkeep
+
+# SSH keys (Pomerium setup)
+pomerium_user_ca_key
+pomerium_user_ca_key.pub
+ssh_host_*_key
+ssh_host_*_key.pub
+
+# Docker
+*.log
+
+# Editor and IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+tmp/
+temp/

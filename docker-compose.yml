@@ -46,7 +46,7 @@ services:
     volumes:
       - ./openclaw-data/config:/claw
       - ./openclaw-data/workspace:/claw/workspace
-      - ./openclaw-data/pomerium-ssh:/var/lib/pomerium:ro  # For Pomerium User CA key (read-only)
+      - /var/run/docker.sock:/var/run/docker.sock
     init: true
     restart: unless-stopped
     networks:

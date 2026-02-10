@@ -23,13 +23,15 @@ For complete setup instructions, configuration options, and troubleshooting, ple
 
 ## Quick Setup
 
+### New to Pomerium SSH? (Recommended Path)
+
 ```bash
 # 1. Clone this repository
 
 # git clone
 git clone https://github.com/pomerium/openclaw-pomerium-guide
 
-# vai GitHub CLI
+# via GitHub CLI
 gh repo clone pomerium/openclaw-pomerium-guide
 
 cd openclaw-pomerium-guide
@@ -44,6 +46,25 @@ cp .env.example .env
 # 4. Start services
 docker-compose up -d
 ```
+
+### Already Have Pomerium SSH Configured?
+
+If you already have SSH routes configured in Pomerium Zero with a User CA key:
+
+```bash
+# 1. Clone this repository (same as above)
+
+# 2. Configure environment (same as above)
+
+# 3. Copy your existing User CA public key
+# Instead of running setup-ssh.sh, manually copy your existing public key:
+cp /path/to/your/existing/pomerium_user_ca_key.pub ./openclaw-data/pomerium-ssh/
+
+# 4. Start services
+docker-compose up -d
+```
+
+**Note:** Generating new SSH keys will invalidate your existing Pomerium SSH configuration. Only run `./setup-ssh.sh` if you're setting up Pomerium SSH for the first time or intentionally rotating your keys.
 
 For detailed prerequisites, network requirements, and step-by-step instructions, see the [full guide](https://deploy-preview-2084--pomerium-docs.netlify.app/docs/guides/openclaw-gateway).
 

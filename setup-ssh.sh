@@ -5,6 +5,19 @@ echo "=================================================="
 echo "OpenClaw + Pomerium SSH Setup Script"
 echo "=================================================="
 echo ""
+echo "⚠️  IMPORTANT: If you already have SSH configured in Pomerium Zero"
+echo "   with a User CA key, you should NOT run this script."
+echo ""
+echo "   Instead, manually copy your existing User CA public key to:"
+echo "   ./openclaw-data/pomerium-ssh/pomerium_user_ca_key.pub"
+echo ""
+read -p "Do you want to continue with setup? (y/N): " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Setup cancelled."
+    exit 0
+fi
+echo ""
 
 # Check if we're in the right directory
 if [ ! -f "docker-compose.yml" ]; then

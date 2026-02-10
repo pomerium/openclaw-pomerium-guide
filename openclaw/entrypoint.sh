@@ -32,6 +32,23 @@ su - claw -c "openclaw config set gateway.controlUi.allowedOrigins '$UPDATED'" 2
   echo "Warning: Could not set allowedOrigins (config may not exist yet)"
 }
 
+# Add sandbox images for OpenClaw
+# See: https://github.com/openclaw/openclaw/issues/4807
+if ! docker image inspect openclaw-sandbox:bookworm-slim >/dev/null 2>&1; then
+  echo "Building sandbox base image openclaw-sandbox:bookworm-slim..."
+  docker pull debian:bookworm-slim
+  docker tag debian:bookworm-slim openclaw-sandbox:bookworm-slim
+fi
+
+if ! docker image inspect openclaw-sandbox-browser:bookworm-slim >/dev/null 2>&1; then
+  echo "Building sandbox browser image openclaw-sandbox-browser:bookworm-slim..."
+  docker pull debian:bookworm-slim
+  docker tag debian:bookworm-slim openclaw-sandbox-browser:bookworm-slim
+fi
+
+# Ensure claw user owns its home directory contents
+chown -R claw:claw /claw
+
 # Start SSH daemon (must run as root)
 /usr/sbin/sshd
 

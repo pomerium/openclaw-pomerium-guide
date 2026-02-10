@@ -3,7 +3,7 @@ services:
     image: pomerium/pomerium:v0.32.0
     ports:
       - 443:443
-      - 2200:2200  # SSH proxy port for Pomerium SSH access
+      - 2200:2200 # SSH proxy port for Pomerium SSH access
     restart: always
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -26,7 +26,15 @@ services:
         aliases:
           - verify
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8000",
+        ]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -46,6 +54,7 @@ services:
     volumes:
       - ./openclaw-data/config:/claw
       - ./openclaw-data/workspace:/claw/workspace
+      - ./openclaw-data/pomerium-ssh:/var/lib/pomerium:ro # For Pomerium User CA key (read-only)
       - /var/run/docker.sock:/var/run/docker.sock
     init: true
     restart: unless-stopped

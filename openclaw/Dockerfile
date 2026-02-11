@@ -1,14 +1,8 @@
 FROM node:24-slim
 
-# Install git, openssh-server, iproute2 (for ip command), jq, and Docker CLI
+# Install git, openssh-server, iproute2 (for ip command), and jq
 RUN apt-get update && \
-  apt-get install -y git openssh-server iproute2 jq ca-certificates curl sudo && \
-  install -m 0755 -d /etc/apt/keyrings && \
-  curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && \
-  chmod a+r /etc/apt/keyrings/docker.asc && \
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list && \
-  apt-get update && \
-  apt-get install -y docker-ce-cli && \
+  apt-get install -y git openssh-server iproute2 jq sudo && \
   rm -rf /var/lib/apt/lists/*
 
 # Create claw user with home directory at /claw

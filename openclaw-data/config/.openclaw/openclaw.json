@@ -19,20 +19,6 @@
       "subagents": {
         "maxConcurrent": 8
       },
-      "sandbox": {
-        "mode": "non-main",
-        "workspaceAccess": "none",
-        "scope": "session",
-        "docker": {
-          "network": "bridge",
-          "dns": [
-            "1.1.1.1",
-            "1.0.0.1",
-            "8.8.8.8",
-            "8.8.4.4"
-          ]
-        }
-      },
       "compaction": {
         "memoryFlush": {
           "enabled": true
@@ -54,25 +40,6 @@
       "enabled": true,
       "allowFrom": {
         "webchat": []
-      }
-    },
-    "sandbox": {
-      "tools": {
-        "deny": [
-          "exec",
-          "process",
-          "browser",
-          "canvas",
-          "nodes",
-          "gateway",
-          "cron",
-          "telegram",
-          "whatsapp",
-          "discord",
-          "slack",
-          "signal",
-          "imessage"
-        ]
       }
     }
   },

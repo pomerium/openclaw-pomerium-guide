@@ -13,7 +13,7 @@
 >
 > - OpenClaw's internal operations and tool execution
 > - Code or commands run by authenticated users
-> - Subagent isolation (configurable via sandboxing - see below)
+
 
 A containerized deployment of [OpenClaw](https://openclaw.ai/) deployment secured by Pomerium's zero-trust identity-aware proxy.
 
@@ -80,7 +80,7 @@ OpenClaw is distributed as an npm package and doesn't provide an official Docker
 
 - OpenClaw CLI installed from npm
 - SSH server with Pomerium User CA integration
-- Git and Docker CLI for agent operations
+- Git for agent operations
 - Persistent workspace mounted at `/claw/workspace`
 
 The gateway runs on an internal Docker network with none of those ports exposed to the internet. All access is proxied through Pomerium, which provides identity-aware, zero-trust access control. SSH traffic via port 2200 and HTTPS traffic via port 443 are secured with context-based authorization policies that verify user identity and device posture before granting access. See the [deployment guide](https://docs.pomerium.com/guides/openclaw-gateway) for detailed architecture and security considerations. Where you deploy, port 22 will typically be open by default. Once Pomerium is configured, you can disable direct port 22 access (recommended), ensuring all SSH connections are authenticated and authorized through Pomerium's policy engine.

@@ -1,11 +1,11 @@
 {
   "meta": {
-    "lastTouchedVersion": "2026.2.3",
+    "lastTouchedVersion": "2026.2.12",
     "lastTouchedAt": "2026-02-05T00:07:35.547Z"
   },
   "wizard": {
     "lastRunAt": "2026-01-29T21:54:58.202Z",
-    "lastRunVersion": "2026.1.27-beta.1",
+    "lastRunVersion": "2026.2.12",
     "lastRunCommand": "configure",
     "lastRunMode": "local"
   },
@@ -55,8 +55,14 @@
     "mode": "local",
     "bind": "lan",
     "auth": {
-      "mode": "token",
-      "token": "configure-gateway-token"
+      "mode": "trusted-proxy",
+      "trustedProxy": {
+        "userHeader": "X-Pomerium-Claim-Email"
+      }
+    },
+    "trustedProxies": [],
+    "controlUi": {
+      "allowedOrigins": []
     },
     "tailscale": {
       "mode": "off",

@@ -1,63 +1,15 @@
 {
-  "meta": {
-    "lastTouchedVersion": "2026.2.3",
-    "lastTouchedAt": "2026-02-05T00:07:35.547Z"
-  },
-  "wizard": {
-    "lastRunAt": "2026-01-29T21:54:58.202Z",
-    "lastRunVersion": "2026.1.27-beta.1",
-    "lastRunCommand": "configure",
-    "lastRunMode": "local"
-  },
-  "agents": {
-    "defaults": {
-      "model": {
-        "primary": "anthropic/claude-opus-4-5"
-      },
-      "workspace": "/root/workspace",
-      "maxConcurrent": 4,
-      "subagents": {
-        "maxConcurrent": 8
-      },
-      "compaction": {
-        "memoryFlush": {
-          "enabled": true
-        }
-      },
-      "memorySearch": {
-        "experimental": {
-          "sessionMemory": true
-        },
-        "sources": [
-          "memory",
-          "sessions"
-        ]
-      }
-    }
-  },
-  "tools": {
-    "elevated": {
-      "enabled": true,
-      "allowFrom": {
-        "webchat": []
-      }
-    }
-  },
-  "messages": {
-    "ackReactionScope": "group-mentions"
-  },
-  "commands": {
-    "native": "auto",
-    "nativeSkills": "auto"
-  },
   "gateway": {
     "port": 18789,
     "mode": "local",
     "bind": "lan",
     "auth": {
-      "mode": "token",
-      "token": "configure-gateway-token"
+      "mode": "trusted-proxy",
+      "trustedProxy": {
+        "userHeader": "X-Pomerium-Claim-Email"
+      }
     },
+    "trustedProxies": [],
     "tailscale": {
       "mode": "off",
       "resetOnExit": false

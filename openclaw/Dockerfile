@@ -8,6 +8,7 @@ RUN apt-get update && \
 # Create claw user with home directory at /claw
 RUN useradd -m -d /claw -s /bin/bash claw && \
   mkdir -p /claw/workspace && \
+  mkdir -p /claw/.openclaw && \
   chown -R claw:claw /claw
 
 # Configure SSH

@@ -45,6 +45,10 @@ cp .env.example .env
 
 # 4. Start services
 docker-compose up -d
+
+# 5. Complete initial OpenClaw pairing/onboarding
+# 6. Apply one-time trusted-proxy gateway config
+./setup-trusted-proxy-once.sh
 ```
 
 ### Already Have Pomerium SSH Configured?
@@ -62,11 +66,17 @@ cp /path/to/your/existing/pomerium_user_ca_key.pub ./openclaw-data/pomerium-ssh/
 
 # 4. Start services
 docker-compose up -d
+
+# 5. Complete initial OpenClaw pairing/onboarding
+# 6. Apply one-time trusted-proxy gateway config
+./setup-trusted-proxy-once.sh
 ```
 
 **Note:** Generating new SSH keys will invalidate your existing Pomerium SSH configuration. Only run `./setup-ssh.sh` if you're setting up Pomerium SSH for the first time or intentionally rotating your keys.
 
 For detailed prerequisites, network requirements, and step-by-step instructions, see the [full guide](https://deploy-preview-2084--pomerium-docs.netlify.app/docs/guides/openclaw-gateway).
+
+**Note:** This repo intentionally does not ship a pre-baked OpenClaw gateway config. The trusted-proxy gateway settings are applied once with `./setup-trusted-proxy-once.sh` after initial pairing/onboarding.
 
 ## What's Included
 

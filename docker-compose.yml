@@ -16,6 +16,7 @@ services:
       - pomerium-data:/data
     networks:
       main:
+        ipv4_address: 172.30.0.10
         aliases:
           - verify.${POMERIUM_CLUSTER_DOMAIN}
 
@@ -68,7 +69,10 @@ services:
       start_period: 30s
 
 networks:
-  main: {}
+  main:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
 
 volumes:
   pomerium-cache:

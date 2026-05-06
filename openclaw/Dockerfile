@@ -1,8 +1,10 @@
 FROM node:24-slim
 
-# Install git, openssh-server, iproute2 (for ip command), and jq
+# Install git, openssh-server, iproute2 (for ip command), curl, and jq
+# (curl + jq are used by ./bootstrap.sh on the host via 'docker compose exec'
+# to talk to the Pomerium Zero API without requiring those tools on the host)
 RUN apt-get update && \
-  apt-get install -y git openssh-server iproute2 jq sudo && \
+  apt-get install -y curl git openssh-server iproute2 jq sudo && \
   rm -rf /var/lib/apt/lists/*
 
 # Create claw user with home directory at /claw
@@ -26,6 +28,10 @@ WORKDIR /claw
 # Copy and set up entrypoint script
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+# In-container helper used by the host-side ./bootstrap.sh orchestrator
+COPY pomclaw/pomclaw.mjs /opt/pomclaw/pomclaw.mjs
+RUN chmod +x /opt/pomclaw/pomclaw.mjs
 
 EXPOSE 22
 

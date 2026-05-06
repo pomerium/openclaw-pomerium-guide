@@ -4,12 +4,14 @@
     "mode": "local",
     "bind": "lan",
     "auth": {
-      "mode": "trusted-proxy",
+      "mode": "token",
+      "token": "configure-gateway-token",
       "trustedProxy": {
-        "userHeader": "X-Pomerium-Claim-Email"
+        "userHeader": "X-Pomerium-Claim-Email",
+        "requiredHeaders": ["X-Pomerium-Jwt-Assertion"]
       }
     },
-    "trustedProxies": [],
+    "trustedProxies": ["172.30.0.10"],
     "tailscale": {
       "mode": "off",
       "resetOnExit": false

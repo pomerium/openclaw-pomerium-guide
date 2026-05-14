@@ -111,13 +111,15 @@ phase_env_setup() {
   # which produces the canonical "missing vars in .env" error, so CI
   # behavior is unchanged.
   #
-  # Collect ALL values first, then write `.env` once. No API calls during
-  # prompting: the cluster bootstrap token implies the user already created
-  # the cluster, so we just ask for the four pieces in order:
-  #   1. POMERIUM_ZERO_TOKEN       -- cluster bootstrap token (proves cluster exists)
-  #   2. POMERIUM_ZERO_API_TOKEN   -- separate, org-scoped API user token
-  #   3. POMERIUM_CLUSTER_DOMAIN   -- the cluster's *.pomerium.app FQDN
-  #   4. OPERATOR_EMAIL            -- email allowed by the route policy
+  # Flow:
+  #   1. Prompt for POMERIUM_ZERO_TOKEN (cluster bootstrap token).
+  #   2. Prompt for POMERIUM_ZERO_API_TOKEN (org-scoped API user token).
+  #   3. Use the API token to list clusters in the user's org. Auto-pick the
+  #      most recently created one (which is almost always what a brand-new
+  #      user wants); show a numbered picker if there are multiple.
+  #      POMERIUM_CLUSTER_DOMAIN is derived from the selection -- no
+  #      manual paste of the FQDN.
+  #   4. Prompt for OPERATOR_EMAIL.
   if [[ -f .env ]]; then
     set -a
     # shellcheck disable=SC1091
@@ -136,10 +138,13 @@ phase_env_setup() {
     # Let require_env produce the canonical missing-vars error.
     return
   fi
+  # curl + jq are only needed for the API-driven cluster lookup. Check here
+  # rather than at script top so users with a complete .env aren't gated.
+  require_tools curl jq
 
   log "==> Pre-bootstrap: collecting Pomerium Zero configuration"
   log ""
-  log "You'll be asked for 4 values. Have these ready (or look them up):"
+  log "Have these ready (or look them up):"
   log ""
   log "  1. Cluster bootstrap token  -- shown once during cluster onboarding."
   log "                                If lost, rotate at:"
@@ -148,9 +153,9 @@ phase_env_setup() {
   log "  2. API user token           -- DIFFERENT token; generate at:"
   log "                                $API_TOKENS_URL"
   log "                                -> Add API User"
-  log "  3. Cluster domain           -- your *.pomerium.app FQDN, visible in"
-  log "                                https://console.pomerium.app/app/clusters"
-  log "  4. Your sign-in email       -- the email allowed to reach OpenClaw."
+  log "  3. Your sign-in email       -- the email allowed to reach OpenClaw."
+  log ""
+  log "(The cluster domain is auto-detected via the API.)"
   log ""
   log "Press Ctrl-C any time to abort."
   echo >&2
@@ -174,11 +179,81 @@ phase_env_setup() {
   fi
 
   if (( need_domain )); then
-    printf "[pomclaw] POMERIUM_CLUSTER_DOMAIN (e.g. fantastic-fox-1234.pomerium.app): "
-    read -r POMERIUM_CLUSTER_DOMAIN || POMERIUM_CLUSTER_DOMAIN=""
-    if [[ -z "$POMERIUM_CLUSTER_DOMAIN" ]]; then
-      log_err "POMERIUM_CLUSTER_DOMAIN is required."
+    log "Looking up your clusters..."
+    local auth_resp auth_code id_token
+    auth_resp=$(curl -sS -X POST "$ZERO_API/token" \
+      -H "Content-Type: application/json" \
+      -d "$(jq -n --arg t "$POMERIUM_ZERO_API_TOKEN" '{refreshToken: $t}')" \
+      -w $'\n%{http_code}')
+    auth_code=${auth_resp##*$'\n'}
+    auth_resp=${auth_resp%$'\n'*}
+    if [[ "$auth_code" != "200" ]]; then
+      log_err "API token authentication failed (HTTP $auth_code)."
+      log_err "Server response: $auth_resp"
+      log_err ""
+      log_err "Generate a fresh API token at $API_TOKENS_URL and re-run."
       exit 1
+    fi
+    id_token=$(printf '%s' "$auth_resp" | jq -r '.idToken // empty')
+    if [[ -z "$id_token" ]]; then
+      log_err "API token auth returned no idToken. Response: $auth_resp"
+      exit 1
+    fi
+    local org_id
+    org_id=$(curl -sS -H "Authorization: Bearer $id_token" "$ZERO_API/organizations" \
+      | jq -r '.[0].id // empty')
+    if [[ -z "$org_id" ]]; then
+      log_err "No organizations available on this API token."
+      exit 1
+    fi
+    local clusters_json count
+    clusters_json=$(curl -sS -H "Authorization: Bearer $id_token" \
+      "$ZERO_API/organizations/$org_id/clusters")
+    count=$(printf '%s' "$clusters_json" | jq 'length')
+    if (( count == 0 )); then
+      log_err "No clusters found in your Pomerium Zero org."
+      log_err "Create one at https://console.pomerium.app first, then re-run."
+      exit 1
+    fi
+    local sorted
+    sorted=$(printf '%s' "$clusters_json" \
+      | jq -r 'sort_by(.createdAt) | reverse | .[] | "\(.fqdn)\t\(.name)\t\(.createdAt)"')
+    local pick=1
+    if (( count == 1 )); then
+      local fqdn name
+      fqdn=$(printf '%s' "$sorted" | head -n1 | awk -F'\t' '{print $1}')
+      name=$(printf '%s' "$sorted" | head -n1 | awk -F'\t' '{print $2}')
+      log_ok "Using cluster: $name ($fqdn)"
+      POMERIUM_CLUSTER_DOMAIN="$fqdn"
+    else
+      log ""
+      log "Found $count clusters. Most recent first; [1] is the default:"
+      log ""
+      local i=1
+      while IFS=$'\t' read -r fqdn name created; do
+        local mark=""
+        (( i == 1 )) && mark="  <- default"
+        printf "  [%d] %-30s %-40s  created %s%s\n" \
+          "$i" "$name" "$fqdn" "$created" "$mark" >&2
+        i=$((i+1))
+      done <<< "$sorted"
+      log ""
+      printf "[pomclaw] Enter to accept [1], or type a number: "
+      local choice
+      read -r choice || choice=""
+      if [[ -n "$choice" ]]; then
+        if [[ ! "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > count )); then
+          log_err "Invalid choice: $choice"
+          exit 1
+        fi
+        pick=$choice
+      fi
+      local row
+      row=$(printf '%s' "$sorted" | sed -n "${pick}p")
+      POMERIUM_CLUSTER_DOMAIN=$(printf '%s' "$row" | awk -F'\t' '{print $1}')
+      local name
+      name=$(printf '%s' "$row" | awk -F'\t' '{print $2}')
+      log_ok "Using cluster: $name ($POMERIUM_CLUSTER_DOMAIN)"
     fi
   fi
 

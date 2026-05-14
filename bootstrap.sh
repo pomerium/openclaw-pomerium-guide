@@ -157,7 +157,7 @@ phase_env_setup() {
   echo >&2
 
   if (( need_zero )); then
-    printf "[pomclaw] POMERIUM_ZERO_TOKEN: "
+    printf "[pomclaw] Pomerium Zero token: "
     read -r POMERIUM_ZERO_TOKEN || POMERIUM_ZERO_TOKEN=""
     if [[ -z "$POMERIUM_ZERO_TOKEN" ]]; then
       log_err "POMERIUM_ZERO_TOKEN is required."

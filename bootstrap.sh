@@ -154,10 +154,6 @@ phase_env_setup() {
   log "                                $API_TOKENS_URL"
   log "                                -> Add API User"
   log "  3. Your sign-in email       -- the email allowed to reach OpenClaw."
-  log ""
-  log "(The cluster domain is auto-detected via the API.)"
-  log ""
-  log "Press Ctrl-C any time to abort."
   echo >&2
 
   if (( need_zero )); then

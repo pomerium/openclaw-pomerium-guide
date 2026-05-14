@@ -100,12 +100,15 @@ DC()     { docker compose "$@"; }
 INSIDE() {
   # Run a command as the claw user inside the gateway container.
   # Optional env overrides are passed via --env=KEY=VALUE flags before the command.
-  local env_args=()
+  # We prepend the env assignments to the shell command itself because
+  # `su - claw` starts a login shell that wipes the environment, so
+  # `docker exec -e` alone won't propagate them to the inner process.
+  local env_prefix=""
   while [[ $# -gt 0 && "$1" == --env=* ]]; do
-    env_args+=(-e "${1#--env=}")
+    env_prefix+="${1#--env=} "
     shift
   done
-  DC exec -T "${env_args[@]}" openclaw-gateway su - claw -c "$*"
+  DC exec -T openclaw-gateway su - claw -c "${env_prefix}$*"
 }
 INSIDE_ROOT() {
   # Run as root inside the gateway container (used for jq/curl invocations
@@ -116,6 +119,35 @@ INSIDE_ROOT() {
     shift
   done
   DC exec -T "${env_args[@]}" openclaw-gateway "$@"
+}
+
+resolve_pomerium_replica_ip() {
+  # Resolve the live IP of the pomerium container. We read Docker's runtime
+  # state (not docker-compose.yml), so this works whether the compose file
+  # pins `ipv4_address` or leaves Docker to auto-assign. Users hitting a
+  # subnet collision (VPN, other stacks) can change `networks.main` in
+  # docker-compose.yml without touching the script.
+  #
+  # Assumes:
+  #   - The stack is up (run after `phase_stack_up`).
+  #   - Pomerium is attached to exactly one Docker network -- the `main`
+  #     network this compose stack defines. If you attach it to additional
+  #     networks, this returns whichever IP Docker iterates first, which is
+  #     not stable; query by network name in that case.
+  local container ip
+  container=$(DC ps -q pomerium 2>/dev/null | head -n1)
+  if [[ -z "$container" ]]; then
+    log_err "pomerium container not running (\`docker compose ps pomerium\`)"
+    exit 1
+  fi
+  ip=$(docker inspect "$container" \
+    --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{"\n"}}{{end}}' 2>/dev/null \
+    | grep -v '^$' | head -n1 | tr -d '\r ')
+  if [[ -z "$ip" ]]; then
+    log_err "could not resolve pomerium IP from docker inspect (container fully up?)"
+    exit 1
+  fi
+  printf '%s' "$ip"
 }
 
 # ---- generic helpers ----
@@ -243,8 +275,8 @@ zero_resolve_ids() {
   log_ok "  namespace:    $NAMESPACE_ID"
 }
 
-zero_set_ssh_config() {
-  log "Uploading SSH host keys + User CA private key to the cluster's SSH settings"
+zero_set_cluster_settings() {
+  log "Setting cluster SSH config + JWT claim header mapping"
   # Read the key files from the host and pass them as raw stdin to jq inside
   # the container, which builds the JSON Patch payload.
   local h_ed h_rsa h_ecdsa user_ca
@@ -253,6 +285,14 @@ zero_set_ssh_config() {
   h_ecdsa=$(<ssh_host_ecdsa_key)
   user_ca=$(<pomerium_user_ca_key)
 
+  # `jwtClaimsHeaders` tells Pomerium to extract the named claim from the
+  # JWT it issues (hosted authenticate) and forward it as the named HTTP
+  # header on requests to upstreams. OpenClaw's trusted-proxy auth keys on
+  # `x-pomerium-claim-email` (see `phase_configure_trusted_proxy`), but
+  # individual claim headers are *not* emitted by default on hosted
+  # authenticate clusters -- you have to opt in here. Without this mapping
+  # the upstream sees only `X-Pomerium-Jwt-Assertion` and the gateway
+  # rejects every request with `reason=trusted_proxy_user_missing`.
   local patch
   patch=$(zero_jq -n \
     --arg ed "$h_ed" \
@@ -260,13 +300,14 @@ zero_set_ssh_config() {
     --arg ecdsa "$h_ecdsa" \
     --arg ca "$user_ca" \
     '[
-      {op: "replace", path: "/sshAddress", value: "0.0.0.0:22"},
-      {op: "replace", path: "/sshHostKeys", value: [$ed, $rsa, $ecdsa]},
-      {op: "replace", path: "/sshUserCaKey", value: $ca}
+      {op: "add", path: "/sshAddress",       value: "0.0.0.0:22"},
+      {op: "add", path: "/sshHostKeys",      value: [$ed, $rsa, $ecdsa]},
+      {op: "add", path: "/sshUserCaKey",     value: $ca},
+      {op: "add", path: "/jwtClaimsHeaders", value: {"x-pomerium-claim-email": "email"}}
     ]')
 
   zero_curl PATCH "/organizations/$ORG_ID/clusters/$CLUSTER_ID/settings" "$patch" >/dev/null
-  log_ok "SSH cluster config set"
+  log_ok "cluster settings applied (SSH config + jwtClaimsHeaders)"
 }
 
 zero_get_or_create_policy() {
@@ -291,6 +332,9 @@ zero_get_or_create_policy() {
     '{
       namespaceId: $ns,
       name: $name,
+      description: ("Allow " + $email + " to access OpenClaw"),
+      explanation: "Access denied. Only the configured operator email is permitted.",
+      remediation: "Contact the OpenClaw operator to request access.",
       enforced: false,
       ppl: { allow: { or: [{ email: { is: $email } }] } }
     }')
@@ -314,25 +358,37 @@ zero_get_or_create_route() {
 
   log "Creating $kind route ($from -> $to)"
   local body
+  # Common fields required by the Pomerium Zero API
+  local common_fields='
+    allowSpdy: false,
+    allowWebsockets: false,
+    enableGoogleCloudServerlessAuthentication: false,
+    preserveHostHeader: false,
+    showErrorDetails: false,
+    tlsSkipVerify: false,
+    tlsUpstreamAllowRenegotiation: false
+  '
   if [[ "$kind" == "web" ]]; then
     body=$(zero_jq -n \
       --arg ns "$NAMESPACE_ID" --arg name "$name" \
       --arg from "$from" --arg to "$to" --arg pid "$POLICY_ID" \
-      '{
-        namespaceId: $ns, name: $name, from: $from, to: [$to],
-        policyIds: [$pid],
+      "{
+        namespaceId: \$ns, name: \$name, from: \$from, to: [\$to],
+        policyIds: [\$pid],
         passIdentityHeaders: true,
-        setRequestHeaders: { "x-openclaw-scopes": "operator.admin" },
-        allowWebsockets: true
-      }')
+        setRequestHeaders: { \"x-openclaw-scopes\": \"operator.admin\" },
+        allowWebsockets: true,
+        $common_fields
+      }")
   else
     body=$(zero_jq -n \
       --arg ns "$NAMESPACE_ID" --arg name "$name" \
       --arg from "$from" --arg to "$to" --arg pid "$POLICY_ID" \
-      '{
-        namespaceId: $ns, name: $name, from: $from, to: [$to],
-        policyIds: [$pid]
-      }')
+      "{
+        namespaceId: \$ns, name: \$name, from: \$from, to: [\$to],
+        policyIds: [\$pid],
+        $common_fields
+      }")
   fi
   local rid
   rid=$(zero_curl POST "/organizations/$ORG_ID/routes" "$body" \
@@ -373,7 +429,7 @@ phase_zero_api() {
 
   zero_login
   zero_resolve_ids
-  zero_set_ssh_config
+  zero_set_cluster_settings
   zero_get_or_create_policy
   zero_get_or_create_route "openclaw-ssh" "ssh://openclaw" "ssh://openclaw-gateway:22" "ssh"
   zero_get_or_create_route "openclaw-web" "https://openclaw.$POMERIUM_CLUSTER_DOMAIN" "http://openclaw-gateway:18789" "web"
@@ -389,65 +445,72 @@ phase_stack_up() {
   log_ok "stack is up"
 }
 
-phase_ensure_token() {
-  local current
-  current="$(helper token)"
-  if [[ -z "$current" || "$current" == "configure-gateway-token" ]]; then
-    log "Rotating placeholder gateway token"
-    local fresh
-    fresh="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32)"
-    INSIDE "openclaw config set gateway.auth.token '$fresh'" >/dev/null
-    DC restart openclaw-gateway
-    wait_for "gateway responding after restart" 60 2 gateway_listening
-    printf '%s' "$fresh"
-  else
-    printf '%s' "$current"
-  fi
-}
-
-phase_trigger_pairing() {
-  local token="$1"
-  log "Triggering pending pairing via token-mode WebSocket"
-  if ! retry 5 1 16 \
-       INSIDE "--env=OPENCLAW_GATEWAY_TOKEN=$token" \
-       "node $POMCLAW_HELPER trigger-pairing"; then
-    log_err "could not trigger pairing"
-    exit 1
-  fi
-  if ! wait_for "pending pairing to register" 30 2 \
-       sh -c '[ "$(docker compose exec -T openclaw-gateway su - claw -c "node /opt/pomclaw/pomclaw.mjs pending-count" | tr -d "\r\n ")" -gt 0 ]'; then
-    log_err "no pending pairing showed up"
-    exit 1
-  fi
-  log_ok "pending pairing request registered"
-}
-
-phase_approve() {
-  local req_id
-  req_id="$(helper latest-pending | tr -d '\r\n ')"
-  if [[ -z "$req_id" ]]; then
-    log_err "no pending pairing to approve"
-    exit 1
-  fi
-  log "Approving pairing request $req_id"
-  if ! retry 3 2 8 INSIDE "openclaw devices approve $req_id"; then
-    log_err "could not approve pairing"
-    exit 1
-  fi
-  if ! wait_for "operator pairing to materialize" 30 2 \
-       sh -c '[ "$(docker compose exec -T openclaw-gateway su - claw -c "node /opt/pomclaw/pomclaw.mjs operators-count" | tr -d "\r\n ")" -gt 0 ]'; then
-    log_err "approval did not produce a paired operator device"
-    exit 1
-  fi
-  log_ok "operator device paired"
-}
-
-phase_switch_to_trusted_proxy() {
-  log "==> Phase 2: switching gateway to trusted-proxy auth"
-  INSIDE "openclaw config unset gateway.auth.token" >/dev/null
+phase_configure_trusted_proxy() {
+  # Configure trusted-proxy auth directly. This replaces the older token-mode
+  # WebSocket pairing dance (`phase_ensure_token` -> `trigger-pairing` ->
+  # `devices approve` -> `switch-to-trusted-proxy`), which broke against
+  # OpenClaw 2026.5.7: the gateway now answers the WebSocket `connect`
+  # request with a `connect.challenge` (a nonce that the client must sign
+  # with a device key) before any pending pairing is created, and the
+  # pomclaw.mjs helper doesn't implement the challenge response. Since
+  # trusted-proxy mode only needs three pieces of static config, we set them
+  # directly instead. See hiccups.md for the codepath that broke.
+  #
+  # The pieces written:
+  #   - gateway.auth.trustedProxy.userHeader      : header carrying the user
+  #     id. Pomerium emits "x-pomerium-claim-email" once the cluster's
+  #     jwtClaimsHeaders maps email -> that header name (set in
+  #     zero_set_cluster_settings) AND the route has passIdentityHeaders=true.
+  #   - gateway.auth.trustedProxy.requiredHeaders : the gateway requires this
+  #     header set on every request before honoring userHeader. Pomerium emits
+  #     X-Pomerium-Jwt-Assertion when passIdentityHeaders=true; requiring it
+  #     means an attacker who can sit on the trusted-proxy IP (e.g. a rogue
+  #     container on the docker network) would *also* need to mint a credible
+  #     Pomerium-signed JWT to spoof identity.
+  #   - `allowUsers` is intentionally NOT set: Pomerium's route policy is the
+  #     single source of truth for who can reach this gateway. Duplicating
+  #     the allowlist here drifts.
+  #   - gateway.trustedProxies                    : list of exact upstream IPs
+  #     allowed to inject those headers. OpenClaw doesn't support CIDR here,
+  #     so we list one IP. We resolve it from `docker inspect` (see
+  #     resolve_pomerium_replica_ip) so the value reflects whatever Docker
+  #     actually assigned -- works whether the compose pins
+  #     ipv4_address: 172.30.0.10 or a user picked a different subnet to avoid
+  #     a collision.
+  log "==> Phase 2: configuring trusted-proxy auth"
+  local pomerium_ip
+  pomerium_ip=$(resolve_pomerium_replica_ip)
+  log "  pomerium replica IP: $pomerium_ip"
+  local tp_block
+  tp_block=$(zero_jq -n \
+    --arg uh "x-pomerium-claim-email" \
+    --arg jwt "X-Pomerium-Jwt-Assertion" \
+    '{userHeader: $uh, requiredHeaders: [$jwt]}')
+  local proxies
+  proxies=$(zero_jq -n --arg ip "$pomerium_ip" '[$ip]')
+  INSIDE "openclaw config set gateway.auth.trustedProxy --strict-json '$tp_block'" >/dev/null
+  INSIDE "openclaw config set gateway.trustedProxies --strict-json '$proxies'" >/dev/null
   INSIDE "openclaw config set gateway.auth.mode trusted-proxy" >/dev/null
+  INSIDE "openclaw config unset gateway.auth.token" >/dev/null 2>&1 || true
+  # Note: trusted-proxy auth passes the WS handshake, but the gateway then
+  # clears the browser's connect-frame scopes if its ed25519 device identity
+  # is not in paired.json (see openclaw
+  # `src/gateway/server/ws-connection/connect-policy.ts:88-106` and
+  # `message-handler.ts:1131-1147`). The result is "missing scope:
+  # operator.read" on Control UI RPCs. We deliberately do NOT set
+  # `gateway.controlUi.dangerouslyDisableDeviceAuth: true` to silence that --
+  # without it, a stolen Pomerium session cookie cannot escalate to admin.
+  # Instead, run `./bootstrap.sh pair-browser <deviceId> <publicKey>` once
+  # per browser, using the identity from its localStorage. See that
+  # command's docs for the procedure.
+
   DC restart openclaw-gateway
-  log_ok "gateway restarted in trusted-proxy mode"
+  if ! wait_for "gateway responding after trusted-proxy switch" 60 2 gateway_listening; then
+    log_err "gateway did not come back up. Run: docker compose logs openclaw-gateway"
+    exit 1
+  fi
+  log_ok "gateway in trusted-proxy mode (userHeader=x-pomerium-claim-email, trustedProxies=[$pomerium_ip])"
+  log_warn "Per-browser pairing required next: visit the Control UI once, copy the device identity from localStorage, then run \`./bootstrap.sh pair-browser <deviceId> <publicKey>\`."
 }
 
 phase_offer_token_revocation() {
@@ -495,6 +558,153 @@ cmd_status() {
   log "pending pairings: $pending"
 }
 
+pair_browser_apply() {
+  # Pure pairing logic: validate deviceId/publicKey, stop gateway, write the
+  # paired.json record, restart, wait healthy. No banner / no env load --
+  # callers (cmd_pair_browser, phase_prompt_pair_browser) handle that.
+  local device_id="$1"
+  local public_key="$2"
+  # Sanity-check the deviceId derivation matches the publicKey (gateway uses
+  # sha256(base64url-decoded(publicKey)) hex). Mismatch would silently produce
+  # a paired record the gateway rejects.
+  local derived
+  derived=$(printf '%s' "$public_key" \
+    | INSIDE_ROOT sh -c '
+        tr -- -_ +/ |
+        base64 -d 2>/dev/null |
+        sha256sum |
+        awk "{print \$1}"
+      ' | tr -d '\r\n ')
+  if [[ -n "$derived" && "$derived" != "$device_id" ]]; then
+    log_err "deviceId mismatch: expected sha256(pubkey)=$derived but got $device_id"
+    log_err "Re-copy the deviceId from the browser's localStorage."
+    exit 1
+  fi
+  log "Pairing browser device $device_id with operator.admin/read/write/approvals/pairing"
+  DC stop openclaw-gateway >/dev/null
+  DC run --rm --no-deps --entrypoint sh openclaw-gateway -c "
+    set -e
+    f=/claw/.openclaw/devices/paired.json
+    [ -s \"\$f\" ] || echo '{}' > \"\$f\"
+    now=\$(date +%s%3N)
+    # Generate an opaque operator token. The Control UI authenticates with
+    # its ed25519 device key, not this token, but openclaw's
+    # listEffectivePairedDeviceRoles (infra/device-pairing.ts:246-259) only
+    # honors paired-device roles when the device has at least one
+    # non-revoked tokens.<role> entry. Tokenless records fail closed.
+    op_token=\$(head -c 32 /dev/urandom | base64 | tr -d '+/=' | head -c 43)
+    jq --arg id '$device_id' --arg pk '$public_key' --arg tok \"\$op_token\" --argjson now \"\$now\" \
+       '.[\$id] = {
+          deviceId: \$id,
+          publicKey: \$pk,
+          clientId: \"openclaw-control-ui\",
+          clientMode: \"webchat\",
+          role: \"operator\",
+          roles: [\"operator\"],
+          scopes: [\"operator.admin\",\"operator.read\",\"operator.write\",\"operator.approvals\",\"operator.pairing\"],
+          approvedScopes: [\"operator.admin\",\"operator.read\",\"operator.write\",\"operator.approvals\",\"operator.pairing\"],
+          tokens: {
+            operator: {
+              token: \$tok,
+              role: \"operator\",
+              scopes: [\"operator.admin\",\"operator.read\",\"operator.write\",\"operator.approvals\",\"operator.pairing\"],
+              createdAtMs: \$now
+            }
+          },
+          createdAtMs: \$now,
+          approvedAtMs: \$now
+        }' \"\$f\" > \"\$f.new\" && mv \"\$f.new\" \"\$f\" && chown claw:claw \"\$f\"
+  " >/dev/null
+  DC start openclaw-gateway >/dev/null
+  if ! wait_for "gateway responding after pairing" 60 2 gateway_listening; then
+    log_err "gateway did not come back up. Run: docker compose logs openclaw-gateway"
+    exit 1
+  fi
+  log_ok "browser device paired; reload the Control UI"
+}
+
+cmd_pair_browser() {
+  # Pair a Control UI browser device with operator.admin scopes (full thinking
+  # is in pair_browser_apply / hiccup #24). In trusted-proxy mode openclaw's
+  # WS handshake (`src/gateway/server/ws-connection/connect-policy.ts:88-106`,
+  # `message-handler.ts:1131-1147`) zeroes a Control UI session's
+  # connect-frame scopes unless its ed25519 device key is already in
+  # paired.json. This subcommand drops in such a record so the next handshake
+  # binds the requested scopes properly, without resorting to
+  # `gateway.controlUi.dangerouslyDisableDeviceAuth: true` (which lets a
+  # stolen Pomerium session cookie escalate to admin).
+  #
+  # Usage:
+  #   1. Visit the Control UI once in the target browser; it auto-generates
+  #      its ed25519 device identity and stores it in localStorage under
+  #      `openclaw-device-identity-v1`.
+  #   2. In DevTools console:
+  #        JSON.parse(localStorage.getItem("openclaw-device-identity-v1"))
+  #      Copy `deviceId` (sha256 hex of pubkey) and `publicKey` (base64url
+  #      ed25519 pubkey).
+  #   3. ./bootstrap.sh pair-browser <deviceId> <publicKey>
+  #   4. Reload the Control UI. Scopes bind, chat history loads.
+  banner
+  load_env
+  local device_id="${1:-}"
+  local public_key="${2:-}"
+  if [[ -z "$device_id" || -z "$public_key" ]]; then
+    log_err "usage: ./bootstrap.sh pair-browser <deviceId> <publicKey>"
+    log_err ""
+    log_err "Get these from the Control UI's localStorage. In a browser that"
+    log_err "has visited https://openclaw.\$POMERIUM_CLUSTER_DOMAIN at least once,"
+    log_err "open DevTools console and run:"
+    log_err "  JSON.parse(localStorage.getItem(\"openclaw-device-identity-v1\"))"
+    exit 2
+  fi
+  pair_browser_apply "$device_id" "$public_key"
+}
+
+phase_prompt_pair_browser() {
+  # Optional interactive step at end of `bootstrap`. Asks the user to paste
+  # their browser's device identity JSON from localStorage and pairs it.
+  # Idempotent: if a webchat operator device already exists, skip.
+  # Non-TTY: skip (print instructions only).
+  local existing
+  existing=$(INSIDE_ROOT sh -c 'cat /claw/.openclaw/devices/paired.json 2>/dev/null || echo "{}"' \
+    | INSIDE_ROOT jq -r '[.[]? | select((.clientMode // "") == "webchat" and (.role // "") == "operator")] | length' \
+    | tr -d '\r\n ')
+  if [[ "${existing:-0}" -gt 0 ]]; then
+    log_ok "browser device already paired ($existing); skipping pairing prompt"
+    return
+  fi
+  echo >&2
+  log "Last step: pair this browser so the Control UI gets full operator scopes."
+  log "  1. Open  https://openclaw.$POMERIUM_CLUSTER_DOMAIN  in your browser and sign in via Pomerium."
+  log "  2. Open DevTools console (Cmd+Opt+I on Mac, F12 on Win/Linux)."
+  log "  3. Run this and copy the JSON output:"
+  log "       JSON.parse(localStorage.getItem(\"openclaw-device-identity-v1\"))"
+  log "  4. Paste the JSON below (or press Enter to skip and pair later with"
+  log "     \`./bootstrap.sh pair-browser <deviceId> <publicKey>\`)."
+  echo >&2
+  if [[ ! -t 0 ]]; then
+    log_warn "stdin is not a TTY; skipping interactive prompt."
+    log_warn "Pair later with: ./bootstrap.sh pair-browser <deviceId> <publicKey>"
+    return
+  fi
+  printf "[pomclaw] device identity JSON: "
+  local input
+  read -r input || input=""
+  if [[ -z "${input// }" ]]; then
+    log "Skipped. Pair later with: ./bootstrap.sh pair-browser <deviceId> <publicKey>"
+    return
+  fi
+  local device_id public_key
+  device_id=$(printf '%s' "$input" | INSIDE_ROOT jq -r '.deviceId // empty' 2>/dev/null | tr -d '\r\n ')
+  public_key=$(printf '%s' "$input" | INSIDE_ROOT jq -r '.publicKey // empty' 2>/dev/null | tr -d '\r\n ')
+  if [[ -z "$device_id" || -z "$public_key" ]]; then
+    log_err "Couldn't read .deviceId/.publicKey from the pasted value."
+    log_err "Pair later with: ./bootstrap.sh pair-browser <deviceId> <publicKey>"
+    return
+  fi
+  pair_browser_apply "$device_id" "$public_key"
+}
+
 cmd_reset() {
   banner
   load_env
@@ -510,6 +720,9 @@ cmd_reset() {
   INSIDE "openclaw devices clear --yes --pending" || true
   INSIDE "openclaw config set gateway.auth.mode token" >/dev/null
   INSIDE "openclaw config set gateway.auth.token 'configure-gateway-token'" >/dev/null
+  INSIDE "openclaw config unset gateway.auth.trustedProxy" >/dev/null 2>&1 || true
+  INSIDE "openclaw config unset gateway.trustedProxies"   >/dev/null 2>&1 || true
+  INSIDE "openclaw config unset gateway.controlUi.dangerouslyDisableDeviceAuth" >/dev/null 2>&1 || true
   DC restart openclaw-gateway
   log_ok "reset complete; run ./bootstrap.sh to bootstrap again"
 }
@@ -523,30 +736,29 @@ cmd_bootstrap() {
   phase_zero_api
   phase_stack_up
 
-  local mode ops
+  local mode tp_set
   mode="$(helper auth-mode | tr -d '\r\n ')"
-  ops="$(helper operators-count | tr -d '\r\n ')"
-  log "current state: auth.mode=$mode, operator devices=$ops"
-
-  if [[ "$mode" == "trusted-proxy" && "$ops" -gt 0 ]]; then
-    log_ok "already bootstrapped"
+  # `gateway.auth.trustedProxy` populated is the durable signal that Phase 2
+  # has run. We don't use `operators-count` for this: the gateway
+  # self-registers a CLI operator device on startup (role=operator,
+  # scope=operator.pairing), so that count is always >=1 even on a fresh
+  # state.
+  tp_set="$(INSIDE "openclaw config get gateway.auth.trustedProxy" 2>/dev/null | tr -d '\r\n ' || true)"
+  if [[ -n "$tp_set" && "$tp_set" != "null" && "$tp_set" != "{}" ]]; then
+    tp_set=yes
   else
-    if [[ "$mode" == "trusted-proxy" && "$ops" -eq 0 ]]; then
-      log_err "inconsistent state (trusted-proxy mode, no paired operator)."
-      log_err "Run: ./bootstrap.sh reset"
-      exit 1
-    fi
-    if [[ "$ops" -eq 0 ]]; then
-      local token
-      token="$(phase_ensure_token)"
-      phase_trigger_pairing "$token"
-      phase_approve
-    else
-      log_ok "operator already paired; skipping pairing step"
-    fi
-    if [[ "$mode" != "trusted-proxy" ]]; then
-      phase_switch_to_trusted_proxy
-    fi
+    tp_set=no
+  fi
+  log "current state: auth.mode=$mode, trustedProxy=$tp_set"
+
+  if [[ "$mode" == "trusted-proxy" && "$tp_set" == "yes" ]]; then
+    log_ok "already bootstrapped"
+  elif [[ "$mode" == "trusted-proxy" && "$tp_set" == "no" ]]; then
+    log_err "inconsistent state (trusted-proxy mode without trustedProxy config)."
+    log_err "Run: ./bootstrap.sh reset"
+    exit 1
+  else
+    phase_configure_trusted_proxy
   fi
 
   echo >&2
@@ -560,25 +772,32 @@ cmd_bootstrap() {
   log_ok "    ssh claw@openclaw@$POMERIUM_CLUSTER_DOMAIN -p 2200"
   log_ok "================================================================"
 
+  phase_prompt_pair_browser
   phase_offer_token_revocation
 }
 
 case "${1:-bootstrap}" in
-  bootstrap) cmd_bootstrap ;;
-  status)    cmd_status ;;
-  reset)     cmd_reset ;;
+  bootstrap)     cmd_bootstrap ;;
+  status)        cmd_status ;;
+  reset)         cmd_reset ;;
+  pair-browser)  shift; cmd_pair_browser "$@" ;;
   -h|--help|help)
     cat <<EOF
-Usage: $(basename "$0") [bootstrap|status|reset]
+Usage: $(basename "$0") [bootstrap|status|reset|pair-browser <deviceId> <publicKey>]
 
 Commands:
   bootstrap (default)  End-to-end setup: configure Pomerium Zero (SSH cluster
                        config, policy, SSH route, web route), bring up the
-                       Docker stack, pair the operator device, switch the
-                       gateway to trusted-proxy auth.
+                       Docker stack, switch the gateway to trusted-proxy auth.
   status               Print current auth mode and device counts.
   reset                Destructive: clear OpenClaw devices, flip back to
                        token mode. Does not touch Pomerium Zero routes.
+  pair-browser         Pair a Control UI browser's ed25519 device key with
+                       operator.admin scopes. Required once per browser in
+                       trusted-proxy auth mode (see command help below).
+                       Get <deviceId> + <publicKey> from the browser by running:
+                         JSON.parse(localStorage.getItem(
+                           "openclaw-device-identity-v1"))
 
 Required env vars in .env:
   POMERIUM_ZERO_TOKEN, POMERIUM_CLUSTER_DOMAIN,

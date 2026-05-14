@@ -14,6 +14,13 @@ fi
 NEW_ORIGIN="https://openclaw.$POMERIUM_CLUSTER_DOMAIN"
 echo "Configuring allowed origins for $NEW_ORIGIN"
 
+# Ensure gateway.mode is set (required since OpenClaw 2026.4+)
+CURRENT_MODE=$(su - claw -c "openclaw config get gateway.mode" 2>/dev/null || echo "")
+if [ -z "$CURRENT_MODE" ] || [ "$CURRENT_MODE" = "undefined" ]; then
+  echo "Setting gateway.mode=local (required for containerized deployment)"
+  su - claw -c "openclaw config set gateway.mode local" 2>/dev/null || true
+fi
+
 CURRENT=$(su - claw -c "openclaw config get gateway.controlUi.allowedOrigins" 2>/dev/null || echo "[]")
 UPDATED=$(echo "$CURRENT" | jq -c --arg origin "$NEW_ORIGIN" 'if index($origin) then . else . + [$origin] end')
 

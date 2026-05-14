@@ -5,13 +5,8 @@
     "bind": "lan",
     "auth": {
       "mode": "token",
-      "token": "configure-gateway-token",
-      "trustedProxy": {
-        "userHeader": "X-Pomerium-Claim-Email",
-        "requiredHeaders": ["X-Pomerium-Jwt-Assertion"]
-      }
+      "token": "configure-gateway-token"
     },
-    "trustedProxies": ["172.30.0.10"],
     "tailscale": {
       "mode": "off",
       "resetOnExit": false

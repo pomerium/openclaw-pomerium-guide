@@ -689,7 +689,7 @@ phase_configure_trusted_proxy() {
   #     actually assigned -- works whether the compose pins
   #     ipv4_address: 172.30.0.10 or a user picked a different subnet to avoid
   #     a collision.
-  log "Configuring trusted-proxy auth mode"
+  log "Configuring trusted-proxy auth mode..."
   local pomerium_ip
   pomerium_ip=$(resolve_pomerium_replica_ip)
   local tp_block
@@ -699,9 +699,9 @@ phase_configure_trusted_proxy() {
     '{userHeader: $uh, requiredHeaders: [$jwt]}')
   local proxies
   proxies=$(zero_jq -n --arg ip "$pomerium_ip" '[$ip]')
-  INSIDE "openclaw config set gateway.auth.trustedProxy --strict-json '$tp_block'" >/dev/null
-  INSIDE "openclaw config set gateway.trustedProxies --strict-json '$proxies'" >/dev/null
-  INSIDE "openclaw config set gateway.auth.mode trusted-proxy" >/dev/null
+  INSIDE "openclaw config set gateway.auth.trustedProxy --strict-json '$tp_block'" >/dev/null 2>&1
+  INSIDE "openclaw config set gateway.trustedProxies --strict-json '$proxies'" >/dev/null 2>&1
+  INSIDE "openclaw config set gateway.auth.mode trusted-proxy" >/dev/null 2>&1
   INSIDE "openclaw config unset gateway.auth.token" >/dev/null 2>&1 || true
   # Note: trusted-proxy auth passes the WS handshake, but the gateway then
   # clears the browser's connect-frame scopes if its ed25519 device identity
@@ -953,9 +953,9 @@ cmd_reset() {
     log "aborted"
     exit 0
   fi
-  INSIDE "openclaw devices clear --yes --pending" || true
-  INSIDE "openclaw config set gateway.auth.mode token" >/dev/null
-  INSIDE "openclaw config set gateway.auth.token 'configure-gateway-token'" >/dev/null
+  INSIDE "openclaw devices clear --yes --pending" >/dev/null 2>&1 || true
+  INSIDE "openclaw config set gateway.auth.mode token" >/dev/null 2>&1
+  INSIDE "openclaw config set gateway.auth.token 'configure-gateway-token'" >/dev/null 2>&1
   INSIDE "openclaw config unset gateway.auth.trustedProxy" >/dev/null 2>&1 || true
   INSIDE "openclaw config unset gateway.trustedProxies"   >/dev/null 2>&1 || true
   INSIDE "openclaw config unset gateway.controlUi.dangerouslyDisableDeviceAuth" >/dev/null 2>&1 || true

@@ -385,7 +385,21 @@ wait_for() {
   return 1
 }
 
-gateway_listening() { INSIDE "node $POMCLAW_HELPER auth-mode" >/dev/null 2>&1; }
+gateway_listening() {
+  # Two-part readiness check:
+  #   1) The openclaw CLI inside the container can read the config (process
+  #      is up far enough to load openclaw.json). This catches the
+  #      "container started but openclaw still booting" window.
+  #   2) The gateway's HTTP listener on port 18789 is accepting TCP/HTTP
+  #      requests. Without this, Pomerium's reverse proxy hits a
+  #      not-yet-listening upstream and serves 503 to the user. curl with
+  #      no `-f` flag returns 0 on ANY HTTP response (even 4xx), which is
+  #      exactly what we want -- we just need to know the listener is
+  #      accepting connections, not what status it returns from localhost.
+  INSIDE "node $POMCLAW_HELPER auth-mode" >/dev/null 2>&1 \
+    && INSIDE_ROOT curl -s --max-time 5 -o /dev/null \
+                   http://127.0.0.1:18789/ >/dev/null 2>&1
+}
 helper()            { INSIDE "node $POMCLAW_HELPER $1"; }
 
 # ---- Pomerium Zero API helpers (run inside the openclaw-gateway container) ----

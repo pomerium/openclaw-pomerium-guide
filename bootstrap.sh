@@ -849,7 +849,12 @@ pair_browser_apply() {
     log_err "gateway did not come back up. Run: docker compose logs openclaw-gateway"
     exit 1
   fi
-  log_ok "browser device paired; reload the Control UI"
+  log_ok "browser device paired."
+  log ""
+  log "The Control UI's WebSocket will reconnect on its next ping and pick up"
+  log "the new scopes (typically within ~30 seconds). If you don't want to"
+  log "wait, do a hard reload of the page, e.g.:"
+  log "  https://openclaw.${POMERIUM_CLUSTER_DOMAIN:-<your-cluster>.pomerium.app}/chat?session=main"
 }
 
 cmd_pair_browser() {

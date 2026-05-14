@@ -138,69 +138,59 @@ phase_env_setup() {
   fi
 
   log "==> Pre-bootstrap: collecting Pomerium Zero configuration"
-  log "(you'll be prompted only for values not already in .env)"
+  log ""
+  log "You'll be asked for 4 values. Have these ready (or look them up):"
+  log ""
+  log "  1. Cluster bootstrap token  -- shown once during cluster onboarding."
+  log "                                If lost, rotate at:"
+  log "                                https://console.pomerium.app/app/clusters"
+  log "                                -> three-dot menu -> Rotate Token"
+  log "  2. API user token           -- DIFFERENT token; generate at:"
+  log "                                $API_TOKENS_URL"
+  log "                                -> Add API User"
+  log "  3. Cluster domain           -- your *.pomerium.app FQDN, visible in"
+  log "                                https://console.pomerium.app/app/clusters"
+  log "  4. Your sign-in email       -- the email allowed to reach OpenClaw."
+  log ""
+  log "Press Ctrl-C any time to abort."
   echo >&2
 
   if (( need_zero )); then
-    log "1) Cluster bootstrap token (POMERIUM_ZERO_TOKEN)"
-    log "   This is the secret a Pomerium replica uses to register with the"
-    log "   management server. It was shown ONCE during cluster onboarding."
-    log "   If you didn't save it, rotate to get a new one:"
-    log "     https://console.pomerium.app/app/clusters"
-    log "     -> three-dot menu on the cluster row -> Rotate Token"
     printf "[pomclaw] POMERIUM_ZERO_TOKEN: "
     read -r POMERIUM_ZERO_TOKEN || POMERIUM_ZERO_TOKEN=""
     if [[ -z "$POMERIUM_ZERO_TOKEN" ]]; then
       log_err "POMERIUM_ZERO_TOKEN is required."
       exit 1
     fi
-    echo >&2
   fi
 
   if (( need_api )); then
-    log "2) API user token (POMERIUM_ZERO_API_TOKEN)"
-    log "   DIFFERENT from the cluster bootstrap token above. This is an"
-    log "   org-scoped token used only by bootstrap to create the policy +"
-    log "   routes via the Pomerium Zero REST API. Generate one at:"
-    log "     $API_TOKENS_URL"
-    log "     -> Add API User -> copy the generated token"
     printf "[pomclaw] POMERIUM_ZERO_API_TOKEN: "
     read -r POMERIUM_ZERO_API_TOKEN || POMERIUM_ZERO_API_TOKEN=""
     if [[ -z "$POMERIUM_ZERO_API_TOKEN" ]]; then
       log_err "POMERIUM_ZERO_API_TOKEN is required."
       exit 1
     fi
-    echo >&2
   fi
 
   if (( need_domain )); then
-    log "3) Cluster domain (POMERIUM_CLUSTER_DOMAIN)"
-    log "   The fully-qualified hostname of your Pomerium Zero cluster,"
-    log "   e.g. \"fantastic-fox-1234.pomerium.app\". Find it in your"
-    log "   Pomerium Zero console at https://console.pomerium.app/app/clusters"
-    log "   (the FQDN column)."
-    printf "[pomclaw] POMERIUM_CLUSTER_DOMAIN: "
+    printf "[pomclaw] POMERIUM_CLUSTER_DOMAIN (e.g. fantastic-fox-1234.pomerium.app): "
     read -r POMERIUM_CLUSTER_DOMAIN || POMERIUM_CLUSTER_DOMAIN=""
     if [[ -z "$POMERIUM_CLUSTER_DOMAIN" ]]; then
       log_err "POMERIUM_CLUSTER_DOMAIN is required."
       exit 1
     fi
-    echo >&2
   fi
 
   if (( need_email )); then
-    log "4) Your sign-in email (OPERATOR_EMAIL)"
-    log "   What email will you sign in to Pomerium with? Only this email"
-    log "   will be allowed through to OpenClaw -- everyone else gets denied"
-    log "   at the proxy. Usually the email on your Pomerium Zero account."
-    printf "[pomclaw] OPERATOR_EMAIL: "
+    printf "[pomclaw] OPERATOR_EMAIL (your sign-in email): "
     read -r OPERATOR_EMAIL || OPERATOR_EMAIL=""
     if [[ -z "$OPERATOR_EMAIL" ]]; then
       log_err "OPERATOR_EMAIL is required."
       exit 1
     fi
-    echo >&2
   fi
+  echo >&2
 
   local openclaw_version="${OPENCLAW_VERSION:-2026.5.7}"
   cat > .env.new <<EOF

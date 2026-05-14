@@ -868,7 +868,7 @@ pair_browser_apply() {
   log "The Control UI's WebSocket will reconnect on its next ping and pick up"
   log "the new scopes (typically within ~30 seconds). If you don't want to"
   log "wait, do a hard reload of the page, e.g.:"
-  log "  https://openclaw.${POMERIUM_CLUSTER_DOMAIN:-<your-cluster>.pomerium.app}/chat?session=main"
+  log "  https://openclaw.${POMERIUM_CLUSTER_DOMAIN:-<your-cluster>.pomerium.app}"
 }
 
 cmd_pair_browser() {

@@ -759,7 +759,17 @@ phase_offer_token_revocation() {
     else
       log "open the URL manually: $API_TOKENS_URL"
     fi
-    log_warn "After revoking, remove POMERIUM_ZERO_API_TOKEN from .env."
+    # Strip POMERIUM_ZERO_API_TOKEN from .env so the secret doesn't linger
+    # on disk after the user revokes it server-side. Re-running bootstrap
+    # will then prompt for a fresh token. Idempotent: no-op if the line
+    # isn't there or .env doesn't exist.
+    if [[ -f .env ]] && grep -q '^POMERIUM_ZERO_API_TOKEN=' .env; then
+      sed -i.bak '/^POMERIUM_ZERO_API_TOKEN=/d' .env && rm -f .env.bak
+      log_ok "POMERIUM_ZERO_API_TOKEN removed from .env. Revoke the token in"
+      log_ok "the page that just opened to fully invalidate it server-side."
+    else
+      log_warn "After revoking, remove POMERIUM_ZERO_API_TOKEN from .env."
+    fi
   else
     log "skipping; the token stays active until you revoke it manually."
   fi
@@ -1006,6 +1016,9 @@ cmd_bootstrap() {
     phase_configure_trusted_proxy
   fi
 
+  phase_prompt_pair_browser
+  phase_offer_token_revocation
+
   echo >&2
   log_ok "================================================================"
   log_ok "  Setup complete"
@@ -1016,9 +1029,6 @@ cmd_bootstrap() {
   log_ok "  SSH into the gateway container with:"
   log_ok "    ssh claw@openclaw@$POMERIUM_CLUSTER_DOMAIN -p 2200"
   log_ok "================================================================"
-
-  phase_prompt_pair_browser
-  phase_offer_token_revocation
 }
 
 case "${1:-bootstrap}" in

@@ -142,18 +142,8 @@ phase_env_setup() {
   # rather than at script top so users with a complete .env aren't gated.
   require_tools curl jq
 
-  log "==> Pre-bootstrap: collecting Pomerium Zero configuration"
-  log ""
-  log "Have these ready (or look them up):"
-  log ""
-  log "  1. Cluster bootstrap token  -- shown once during cluster onboarding."
-  log "                                If lost, rotate at:"
-  log "                                https://console.pomerium.app/app/clusters"
-  log "                                -> three-dot menu -> Rotate Token"
-  log "  2. API user token           -- DIFFERENT token; generate at:"
-  log "                                $API_TOKENS_URL"
-  log "                                -> Add API User"
-  log "  3. Your sign-in email       -- the email allowed to reach OpenClaw."
+  log "Need: cluster bootstrap token + API user token + your sign-in email."
+  log "Generate an API token at $API_TOKENS_URL if you don't have one."
   echo >&2
 
   if (( need_zero )); then
@@ -175,7 +165,6 @@ phase_env_setup() {
   fi
 
   if (( need_domain )); then
-    log "Looking up your clusters..."
     local auth_resp auth_code id_token
     auth_resp=$(curl -sS -X POST "$ZERO_API/token" \
       -H "Content-Type: application/json" \
@@ -439,7 +428,6 @@ zero_jq() {
 }
 
 zero_login() {
-  log "Authenticating to Pomerium Zero API"
   local body
   body=$(printf '%s' "$POMERIUM_ZERO_API_TOKEN" \
     | zero_jq -Rs '{refreshToken: .}')
@@ -451,7 +439,6 @@ zero_login() {
     exit 1
   fi
   export ID_TOKEN
-  log_ok "authenticated"
 }
 
 zero_resolve_ids() {
@@ -531,7 +518,7 @@ zero_get_or_create_policy() {
   if [[ -n "$existing" ]]; then
     POLICY_ID="$existing"
     export POLICY_ID
-    log_ok "policy already exists: $POLICY_ID"
+    log_ok "policy already exists"
     return 0
   fi
 
@@ -553,7 +540,7 @@ zero_get_or_create_policy() {
   POLICY_ID=$(zero_curl POST "/organizations/$ORG_ID/policies" "$body" \
     | zero_jq -r '.id')
   export POLICY_ID
-  log_ok "policy created: $POLICY_ID"
+  log_ok "policy created"
 }
 
 zero_get_or_create_route() {
@@ -564,7 +551,7 @@ zero_get_or_create_route() {
     | zero_jq -r --arg from "$from" '.[]? | select(.from == $from) | .id' \
     | head -n1)
   if [[ -n "$existing" ]]; then
-    log_ok "$kind route already exists: $existing"
+    log_ok "$kind route already exists"
     return 0
   fi
 
@@ -705,7 +692,6 @@ phase_configure_trusted_proxy() {
   log "Configuring trusted-proxy auth mode"
   local pomerium_ip
   pomerium_ip=$(resolve_pomerium_replica_ip)
-  log "  pomerium replica IP: $pomerium_ip"
   local tp_block
   tp_block=$(zero_jq -n \
     --arg uh "x-pomerium-claim-email" \
@@ -734,20 +720,16 @@ phase_configure_trusted_proxy() {
     log_err "gateway did not come back up. Run: docker compose logs openclaw-gateway"
     exit 1
   fi
-  log_ok "gateway in trusted-proxy mode (userHeader=x-pomerium-claim-email, trustedProxies=[$pomerium_ip])"
+  log_ok "gateway in trusted-proxy mode"
   log_warn "Per-browser pairing required next: visit the Control UI once, copy the device identity from localStorage, then run \`./bootstrap.sh pair-browser <deviceId> <publicKey>\`."
 }
 
 phase_offer_token_revocation() {
   echo >&2
-  log_warn "Least-privilege reminder"
-  log_warn "  The Pomerium Zero API token in your .env was only used to set"
-  log_warn "  up routes and SSH config. Bootstrap doesn't need it again, and"
-  log_warn "  routine operations don't either. Consider revoking it now;"
-  log_warn "  generate a fresh one if you ever need to re-run bootstrap."
-  log_warn ""
-  log_warn "  Manage tokens at: $API_TOKENS_URL"
-  log_warn ""
+  log "The API token in .env isn't needed for normal operation. Revoke it"
+  log "now and generate a fresh one only if you re-run bootstrap."
+  log "Manage tokens at: $API_TOKENS_URL"
+  echo >&2
   printf "Open the API tokens page in your browser now? [y/N]: "
   local answer
   read -r answer || answer=""
@@ -924,13 +906,13 @@ phase_prompt_pair_browser() {
     | INSIDE_ROOT jq -r '[.[]? | select((.clientMode // "") == "webchat" and (.role // "") == "operator")] | length' \
     | tr -d '\r\n ')
   if [[ "${existing:-0}" -gt 0 ]]; then
-    log_ok "browser device already paired ($existing); skipping pairing prompt"
+    log_ok "browser device already paired; skipping pairing prompt"
     return
   fi
   echo >&2
   log "Last step: pair this browser so the Control UI gets full operator scopes."
   log "  1. Open  https://openclaw.$POMERIUM_CLUSTER_DOMAIN  in your browser and sign in via Pomerium."
-  log "  2. Open DevTools console (Cmd+Opt+I on Mac, F12 on Win/Linux)."
+  log "  2. Open DevTools console."
   log "  3. Run this and copy the JSON output:"
   log "       JSON.parse(localStorage.getItem(\"openclaw-device-identity-v1\"))"
   log "  4. Paste the JSON below (or press Enter to skip and pair later with"

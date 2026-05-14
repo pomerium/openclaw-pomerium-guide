@@ -570,6 +570,14 @@ pair_browser_apply() {
   # callers (cmd_pair_browser, phase_prompt_pair_browser) handle that.
   local device_id="$1"
   local public_key="$2"
+  # Ensure the gateway is running so the INSIDE_ROOT sha256 derivation below
+  # can exec into the container. A prior failed pair-browser run can leave
+  # the gateway stopped; `DC start` is a no-op when it's already up.
+  DC start openclaw-gateway >/dev/null 2>&1 || true
+  if ! wait_for "gateway responding" 30 2 gateway_listening; then
+    log_err "gateway is not responding; cannot pair. Run \`docker compose up -d\` first."
+    exit 1
+  fi
   # Sanity-check the deviceId derivation matches the publicKey (gateway uses
   # sha256(base64url-decoded(publicKey)) hex). Mismatch would silently produce
   # a paired record the gateway rejects.
@@ -590,6 +598,11 @@ pair_browser_apply() {
   DC stop openclaw-gateway >/dev/null
   DC run --rm --no-deps --entrypoint sh openclaw-gateway -c "
     set -e
+    # Ensure the devices/ dir exists. On a totally fresh openclaw-data
+    # (or one wiped between bootstrap and pair-browser) the gateway may
+    # not yet have created its devices/ subdir, so mkdir -p as a no-op
+    # for the steady-state case.
+    mkdir -p /claw/.openclaw/devices && chown claw:claw /claw/.openclaw/devices
     f=/claw/.openclaw/devices/paired.json
     [ -s \"\$f\" ] || echo '{}' > \"\$f\"
     now=\$(date +%s%3N)

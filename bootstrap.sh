@@ -834,7 +834,8 @@ cmd_bootstrap() {
   log_ok "    https://docs.openclaw.ai/cli/models#models"
   log_ok ""
   log_ok "  You can chat in the UI right away. For other channels"
-  log_ok "  (Discord, WhatsApp, etc.) see the OpenClaw docs."
+  log_ok "  (Discord, WhatsApp, etc.) see the OpenClaw docs:"
+  log_ok "    https://docs.openclaw.ai/"
   log_ok ""
   log_ok "  SSH into the gateway container with:"
   log_ok "    ssh claw@openclaw@$POMERIUM_CLUSTER_DOMAIN -p 2200"
@@ -843,7 +844,6 @@ cmd_bootstrap() {
   log_ok "  To try a newer version later:"
   log_ok "    1. Edit OPENCLAW_VERSION in .env"
   log_ok "    2. docker compose down && docker compose up -d"
-  log_ok "  OpenClaw docs (release notes, usage): https://docs.openclaw.ai/"
   log_ok "================================================================"
 }
 

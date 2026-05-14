@@ -14,7 +14,6 @@
 #                  auth.mode=trusted-proxy). Replaces the older token-mode
 #                  -> WebSocket-pairing -> switch dance that broke in
 #                  OpenClaw 2026.5.7.
-#   Phase 2.5:     Prompts to pair the operator's browser device.
 #
 # Idempotent and resumable. Re-running picks up from the current state.
 #
@@ -33,7 +32,6 @@
 #   ./bootstrap.sh                       # bootstrap (default; interactive if .env missing)
 #   ./bootstrap.sh status                # print current state, no changes
 #   ./bootstrap.sh reset                 # destructive: clear devices + flip back to token mode
-#   ./bootstrap.sh pair-browser <id> <pk>  # pair a Control UI browser device
 
 set -euo pipefail
 
@@ -703,17 +701,6 @@ phase_configure_trusted_proxy() {
   INSIDE "openclaw config set gateway.trustedProxies --strict-json '$proxies'" >/dev/null 2>&1
   INSIDE "openclaw config set gateway.auth.mode trusted-proxy" >/dev/null 2>&1
   INSIDE "openclaw config unset gateway.auth.token" >/dev/null 2>&1 || true
-  # Note: trusted-proxy auth passes the WS handshake, but the gateway then
-  # clears the browser's connect-frame scopes if its ed25519 device identity
-  # is not in paired.json (see openclaw
-  # `src/gateway/server/ws-connection/connect-policy.ts:88-106` and
-  # `message-handler.ts:1131-1147`). The result is "missing scope:
-  # operator.read" on Control UI RPCs. We deliberately do NOT set
-  # `gateway.controlUi.dangerouslyDisableDeviceAuth: true` to silence that --
-  # without it, a stolen Pomerium session cookie cannot escalate to admin.
-  # Instead, run `./bootstrap.sh pair-browser <deviceId> <publicKey>` once
-  # per browser, using the identity from its localStorage. See that
-  # command's docs for the procedure.
 
   DC restart openclaw-gateway
   if ! wait_for "gateway responding after trusted-proxy switch" 60 2 gateway_listening; then
@@ -721,7 +708,6 @@ phase_configure_trusted_proxy() {
     exit 1
   fi
   log_ok "gateway in trusted-proxy mode"
-  log_warn "Per-browser pairing required next: visit the Control UI once, copy the device identity from localStorage, then run \`./bootstrap.sh pair-browser <deviceId> <publicKey>\`."
 }
 
 phase_offer_token_revocation() {
@@ -773,172 +759,6 @@ cmd_status() {
   log "auth.mode:        ${mode:-unknown}"
   log "operator devices: $ops"
   log "pending pairings: $pending"
-}
-
-pair_browser_apply() {
-  # Pure pairing logic: validate deviceId/publicKey, stop gateway, write the
-  # paired.json record, restart, wait healthy. No banner / no env load --
-  # callers (cmd_pair_browser, phase_prompt_pair_browser) handle that.
-  local device_id="$1"
-  local public_key="$2"
-  # Ensure the gateway is running so the INSIDE_ROOT sha256 derivation below
-  # can exec into the container. A prior failed pair-browser run can leave
-  # the gateway stopped; `DC start` is a no-op when it's already up.
-  DC start openclaw-gateway >/dev/null 2>&1 || true
-  if ! wait_for "gateway responding" 30 2 gateway_listening; then
-    log_err "gateway is not responding; cannot pair. Run \`docker compose up -d\` first."
-    exit 1
-  fi
-  # Sanity-check the deviceId derivation matches the publicKey (gateway uses
-  # sha256(base64url-decoded(publicKey)) hex). Mismatch would silently produce
-  # a paired record the gateway rejects.
-  local derived
-  derived=$(printf '%s' "$public_key" \
-    | INSIDE_ROOT sh -c '
-        tr -- -_ +/ |
-        base64 -d 2>/dev/null |
-        sha256sum |
-        awk "{print \$1}"
-      ' | tr -d '\r\n ')
-  if [[ -n "$derived" && "$derived" != "$device_id" ]]; then
-    log_err "deviceId mismatch: expected sha256(pubkey)=$derived but got $device_id"
-    log_err "Re-copy the deviceId from the browser's localStorage."
-    exit 1
-  fi
-  log "Pairing browser device $device_id with operator.admin/read/write/approvals/pairing"
-  DC stop openclaw-gateway >/dev/null
-  DC run --rm --no-deps --entrypoint sh openclaw-gateway -c "
-    set -e
-    # Ensure the devices/ dir exists. On a totally fresh openclaw-data
-    # (or one wiped between bootstrap and pair-browser) the gateway may
-    # not yet have created its devices/ subdir, so mkdir -p as a no-op
-    # for the steady-state case.
-    mkdir -p /claw/.openclaw/devices && chown claw:claw /claw/.openclaw/devices
-    f=/claw/.openclaw/devices/paired.json
-    [ -s \"\$f\" ] || echo '{}' > \"\$f\"
-    now=\$(date +%s%3N)
-    # Generate an opaque operator token. The Control UI authenticates with
-    # its ed25519 device key, not this token, but openclaw's
-    # listEffectivePairedDeviceRoles (infra/device-pairing.ts:246-259) only
-    # honors paired-device roles when the device has at least one
-    # non-revoked tokens.<role> entry. Tokenless records fail closed.
-    op_token=\$(head -c 32 /dev/urandom | base64 | tr -d '+/=' | head -c 43)
-    jq --arg id '$device_id' --arg pk '$public_key' --arg tok \"\$op_token\" --argjson now \"\$now\" \
-       '.[\$id] = {
-          deviceId: \$id,
-          publicKey: \$pk,
-          clientId: \"openclaw-control-ui\",
-          clientMode: \"webchat\",
-          role: \"operator\",
-          roles: [\"operator\"],
-          scopes: [\"operator.admin\",\"operator.read\",\"operator.write\",\"operator.approvals\",\"operator.pairing\"],
-          approvedScopes: [\"operator.admin\",\"operator.read\",\"operator.write\",\"operator.approvals\",\"operator.pairing\"],
-          tokens: {
-            operator: {
-              token: \$tok,
-              role: \"operator\",
-              scopes: [\"operator.admin\",\"operator.read\",\"operator.write\",\"operator.approvals\",\"operator.pairing\"],
-              createdAtMs: \$now
-            }
-          },
-          createdAtMs: \$now,
-          approvedAtMs: \$now
-        }' \"\$f\" > \"\$f.new\" && mv \"\$f.new\" \"\$f\" && chown claw:claw \"\$f\"
-  " >/dev/null
-  DC start openclaw-gateway >/dev/null
-  if ! wait_for "gateway responding after pairing" 60 2 gateway_listening; then
-    log_err "gateway did not come back up. Run: docker compose logs openclaw-gateway"
-    exit 1
-  fi
-  log_ok "browser device paired."
-  log ""
-  log "The Control UI's WebSocket should reconnect on its next ping and pick"
-  log "up the new scopes (typically within ~30 seconds). If you don't want"
-  log "to wait, or if the dashboard hasn't updated after ~30s, do a hard"
-  log "reload of:"
-  log "  https://openclaw.${POMERIUM_CLUSTER_DOMAIN:-<your-cluster>.pomerium.app}"
-}
-
-cmd_pair_browser() {
-  # Pair a Control UI browser device with operator.admin scopes (full thinking
-  # is in pair_browser_apply / hiccup #24). In trusted-proxy mode openclaw's
-  # WS handshake (`src/gateway/server/ws-connection/connect-policy.ts:88-106`,
-  # `message-handler.ts:1131-1147`) zeroes a Control UI session's
-  # connect-frame scopes unless its ed25519 device key is already in
-  # paired.json. This subcommand drops in such a record so the next handshake
-  # binds the requested scopes properly, without resorting to
-  # `gateway.controlUi.dangerouslyDisableDeviceAuth: true` (which lets a
-  # stolen Pomerium session cookie escalate to admin).
-  #
-  # Usage:
-  #   1. Visit the Control UI once in the target browser; it auto-generates
-  #      its ed25519 device identity and stores it in localStorage under
-  #      `openclaw-device-identity-v1`.
-  #   2. In DevTools console:
-  #        JSON.parse(localStorage.getItem("openclaw-device-identity-v1"))
-  #      Copy `deviceId` (sha256 hex of pubkey) and `publicKey` (base64url
-  #      ed25519 pubkey).
-  #   3. ./bootstrap.sh pair-browser <deviceId> <publicKey>
-  #   4. Reload the Control UI. Scopes bind, chat history loads.
-  banner
-  load_env
-  local device_id="${1:-}"
-  local public_key="${2:-}"
-  if [[ -z "$device_id" || -z "$public_key" ]]; then
-    log_err "usage: ./bootstrap.sh pair-browser <deviceId> <publicKey>"
-    log_err ""
-    log_err "Get these from the Control UI's localStorage. In a browser that"
-    log_err "has visited https://openclaw.\$POMERIUM_CLUSTER_DOMAIN at least once,"
-    log_err "open DevTools console and run:"
-    log_err "  JSON.parse(localStorage.getItem(\"openclaw-device-identity-v1\"))"
-    exit 2
-  fi
-  pair_browser_apply "$device_id" "$public_key"
-}
-
-phase_prompt_pair_browser() {
-  # Optional interactive step at end of `bootstrap`. Asks the user to paste
-  # their browser's device identity JSON from localStorage and pairs it.
-  # Idempotent: if a webchat operator device already exists, skip.
-  # Non-TTY: skip (print instructions only).
-  local existing
-  existing=$(INSIDE_ROOT sh -c 'cat /claw/.openclaw/devices/paired.json 2>/dev/null || echo "{}"' \
-    | INSIDE_ROOT jq -r '[.[]? | select((.clientMode // "") == "webchat" and (.role // "") == "operator")] | length' \
-    | tr -d '\r\n ')
-  if [[ "${existing:-0}" -gt 0 ]]; then
-    log_ok "browser device already paired; skipping pairing prompt"
-    return
-  fi
-  echo >&2
-  log "Last step: pair this browser so the Control UI gets full operator scopes."
-  log "  1. Open  https://openclaw.$POMERIUM_CLUSTER_DOMAIN  in your browser and sign in via Pomerium."
-  log "  2. Open DevTools console."
-  log "  3. Run this and copy the JSON output:"
-  log "       JSON.parse(localStorage.getItem(\"openclaw-device-identity-v1\"))"
-  log "  4. Paste the JSON below (or press Enter to skip and pair later with"
-  log "     \`./bootstrap.sh pair-browser <deviceId> <publicKey>\`)."
-  echo >&2
-  if [[ ! -t 0 ]]; then
-    log_warn "stdin is not a TTY; skipping interactive prompt."
-    log_warn "Pair later with: ./bootstrap.sh pair-browser <deviceId> <publicKey>"
-    return
-  fi
-  printf "[pomclaw] device identity JSON: "
-  local input
-  read -r input || input=""
-  if [[ -z "${input// }" ]]; then
-    log "Skipped. Pair later with: ./bootstrap.sh pair-browser <deviceId> <publicKey>"
-    return
-  fi
-  local device_id public_key
-  device_id=$(printf '%s' "$input" | INSIDE_ROOT jq -r '.deviceId // empty' 2>/dev/null | tr -d '\r\n ')
-  public_key=$(printf '%s' "$input" | INSIDE_ROOT jq -r '.publicKey // empty' 2>/dev/null | tr -d '\r\n ')
-  if [[ -z "$device_id" || -z "$public_key" ]]; then
-    log_err "Couldn't read .deviceId/.publicKey from the pasted value."
-    log_err "Pair later with: ./bootstrap.sh pair-browser <deviceId> <publicKey>"
-    return
-  fi
-  pair_browser_apply "$device_id" "$public_key"
 }
 
 cmd_reset() {
@@ -998,7 +818,6 @@ cmd_bootstrap() {
     phase_configure_trusted_proxy
   fi
 
-  phase_prompt_pair_browser
   phase_offer_token_revocation
 
   echo >&2
@@ -1021,10 +840,9 @@ case "${1:-bootstrap}" in
   bootstrap)     cmd_bootstrap ;;
   status)        cmd_status ;;
   reset)         cmd_reset ;;
-  pair-browser)  shift; cmd_pair_browser "$@" ;;
   -h|--help|help)
     cat <<EOF
-Usage: $(basename "$0") [bootstrap|status|reset|pair-browser <deviceId> <publicKey>]
+Usage: $(basename "$0") [bootstrap|status|reset]
 
 Commands:
   bootstrap (default)  End-to-end setup: configure Pomerium Zero (SSH cluster
@@ -1033,12 +851,6 @@ Commands:
   status               Print current auth mode and device counts.
   reset                Destructive: clear OpenClaw devices, flip back to
                        token mode. Does not touch Pomerium Zero routes.
-  pair-browser         Pair a Control UI browser's ed25519 device key with
-                       operator.admin scopes. Required once per browser in
-                       trusted-proxy auth mode (see command help below).
-                       Get <deviceId> + <publicKey> from the browser by running:
-                         JSON.parse(localStorage.getItem(
-                           "openclaw-device-identity-v1"))
 
 Required env vars in .env:
   POMERIUM_ZERO_TOKEN, POMERIUM_CLUSTER_DOMAIN,

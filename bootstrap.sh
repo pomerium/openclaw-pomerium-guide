@@ -837,7 +837,7 @@ cmd_bootstrap() {
   log_ok "  To try a newer version later:"
   log_ok "    1. Edit OPENCLAW_VERSION in .env"
   log_ok "    2. docker compose down && docker compose up -d"
-  log_ok "  See the OpenClaw docs for release notes."
+  log_ok "  OpenClaw docs (release notes, usage): https://docs.openclaw.ai/"
   log_ok "================================================================"
 }
 

@@ -358,10 +358,15 @@ zero_get_or_create_route() {
 
   log "Creating $kind route ($from -> $to)"
   local body
-  # Common fields required by the Pomerium Zero API
+  # Common fields required by the Pomerium Zero API. `allowWebsockets` is
+  # intentionally NOT in this block -- each route kind sets it explicitly
+  # (web=true, ssh=false). It used to live here, but jq object construction
+  # is last-write-wins, so an earlier `allowWebsockets: true` in the route
+  # body was being silently clobbered by this block when it expanded after.
+  # See hiccups #5 (Zero API required-fields list) and the websocket entry
+  # for the regression that resurfaced this.
   local common_fields='
     allowSpdy: false,
-    allowWebsockets: false,
     enableGoogleCloudServerlessAuthentication: false,
     preserveHostHeader: false,
     showErrorDetails: false,
@@ -377,8 +382,8 @@ zero_get_or_create_route() {
         policyIds: [\$pid],
         passIdentityHeaders: true,
         setRequestHeaders: { \"x-openclaw-scopes\": \"operator.admin\" },
-        allowWebsockets: true,
-        $common_fields
+        $common_fields,
+        allowWebsockets: true
       }")
   else
     body=$(zero_jq -n \
@@ -387,7 +392,8 @@ zero_get_or_create_route() {
       "{
         namespaceId: \$ns, name: \$name, from: \$from, to: [\$to],
         policyIds: [\$pid],
-        $common_fields
+        $common_fields,
+        allowWebsockets: false
       }")
   fi
   local rid

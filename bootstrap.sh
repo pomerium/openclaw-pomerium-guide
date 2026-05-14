@@ -611,7 +611,7 @@ zero_get_or_create_route() {
   local rid
   rid=$(zero_curl POST "/organizations/$ORG_ID/routes" "$body" \
     | zero_jq -r '.id')
-  log_ok "$kind route created: $rid"
+  log_ok "$kind route created"
 }
 
 # ---- phases ----

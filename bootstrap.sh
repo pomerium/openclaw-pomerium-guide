@@ -459,7 +459,10 @@ zero_login() {
 }
 
 zero_resolve_ids() {
-  log "Resolving organization + cluster IDs (looking up $POMERIUM_CLUSTER_DOMAIN)"
+  # Resolve org/cluster/namespace IDs from the cluster's FQDN. These are
+  # opaque internal identifiers (e.g. `bKfXBzxQnkQcXkSBxrvHfkbVZnb`) that
+  # users don't need to see -- they're only used as path components in
+  # subsequent API calls. Errors that mention them are still surfaced.
   local orgs
   orgs=$(zero_curl GET "/organizations") || exit 1
   ORG_ID=$(printf '%s' "$orgs" | zero_jq -r '.[0].id // empty')
@@ -486,9 +489,6 @@ zero_resolve_ids() {
   CLUSTER_ID=${match% *}
   NAMESPACE_ID=${match#* }
   export ORG_ID CLUSTER_ID NAMESPACE_ID
-  log_ok "  organization: $ORG_ID"
-  log_ok "  cluster:      $CLUSTER_ID"
-  log_ok "  namespace:    $NAMESPACE_ID"
 }
 
 zero_set_cluster_settings() {

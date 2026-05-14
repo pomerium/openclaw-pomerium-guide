@@ -284,7 +284,7 @@ OPENCLAW_VERSION=$openclaw_version # defaults to latest stable release if not se
 EOF
   mv .env.new .env
   chmod 600 .env
-  log_ok ".env written with all four required values."
+  log_ok ".env written"
   echo >&2
   # Re-source so subsequent phases see the new values in this shell.
   set -a

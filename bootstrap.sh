@@ -4,16 +4,17 @@
 # What this does:
 #   Pre-bootstrap: Interactively prompts for the four required values when
 #                  .env is missing or incomplete (no-op on full .env).
-#   Phase 0:       Generates SSH keys, patches the cluster's SSH config +
+#   Phase 0:       Generates SSH keys, brings up openclaw-gateway + pomerium
+#                  (pomerium up so its container IP is resolvable for the
+#                  trusted-proxy step), patches the cluster's SSH config +
 #                  jwtClaimsHeaders in Pomerium Zero, creates the policy +
 #                  SSH route + web route via the Pomerium Zero API.
-#   Phase 1:       Brings up the rest of the docker compose stack
-#                  (pomerium, verify).
-#   Phase 2:       Configures the gateway for trusted-proxy auth directly
+#   Phase 1:       Configures the gateway for trusted-proxy auth directly
 #                  (gateway.auth.trustedProxy + gateway.trustedProxies +
 #                  auth.mode=trusted-proxy). Replaces the older token-mode
 #                  -> WebSocket-pairing -> switch dance that broke in
 #                  OpenClaw 2026.5.7.
+#   Phase 2:       Brings up the rest of the docker compose stack (verify).
 #
 # Idempotent and resumable. Re-running picks up from the current state.
 #
@@ -619,9 +620,11 @@ phase_zero_api() {
   log "Configuring SSH, policy and routes"
   phase_generate_ssh_keys
 
-  # Bring up just the openclaw-gateway service so we can use its installed
-  # curl + jq for the API calls. The rest of the stack (pomerium, verify)
-  # comes up in Phase 1, after the routes are configured.
+  # Bring up openclaw-gateway and pomerium together. The gateway is needed
+  # for its installed curl + jq (used to call the Pomerium Zero API below);
+  # pomerium is started here too so phase_configure_trusted_proxy can resolve
+  # its container IP without an extra `up -d` step. The verify service comes
+  # up later in phase_stack_up.
   #
   # `DC build` first: `docker-compose.yml` tags the service `image: openclaw:VERSION`
   # which doesn't exist on any public registry; without an explicit build the
@@ -630,8 +633,8 @@ phase_zero_api() {
   # skips the pull attempt. Cached on re-runs.
   log "Building openclaw-gateway image (cached on re-runs)"
   DC build openclaw-gateway >/dev/null
-  log "Starting openclaw-gateway (used as a JSON utility container for API setup)"
-  DC up -d openclaw-gateway
+  log "Starting openclaw-gateway + pomerium"
+  DC up -d openclaw-gateway pomerium
   if ! wait_for "openclaw-gateway exec ready" 60 2 \
        sh -c 'docker compose exec -T openclaw-gateway sh -c "command -v curl && command -v jq" >/dev/null 2>&1'; then
     log_err "openclaw-gateway did not become exec-ready"
@@ -791,15 +794,14 @@ cmd_bootstrap() {
   require_tools docker ssh-keygen
 
   phase_zero_api
-  phase_stack_up
 
   local mode tp_set
   mode="$(helper auth-mode | tr -d '\r\n ')"
-  # `gateway.auth.trustedProxy` populated is the durable signal that Phase 2
-  # has run. We don't use `operators-count` for this: the gateway
-  # self-registers a CLI operator device on startup (role=operator,
-  # scope=operator.pairing), so that count is always >=1 even on a fresh
-  # state.
+  # `gateway.auth.trustedProxy` populated is the durable signal that the
+  # trusted-proxy switch has run. We don't use `operators-count` for this:
+  # the gateway self-registers a CLI operator device on startup
+  # (role=operator, scope=operator.pairing), so that count is always >=1
+  # even on a fresh state.
   tp_set="$(INSIDE "openclaw config get gateway.auth.trustedProxy" 2>/dev/null | tr -d '\r\n ' || true)"
   if [[ -n "$tp_set" && "$tp_set" != "null" && "$tp_set" != "{}" ]]; then
     tp_set=yes
@@ -817,6 +819,8 @@ cmd_bootstrap() {
   else
     phase_configure_trusted_proxy
   fi
+
+  phase_stack_up
 
   phase_offer_token_revocation
 

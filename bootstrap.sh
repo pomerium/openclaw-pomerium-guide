@@ -166,7 +166,7 @@ phase_env_setup() {
   fi
 
   if (( need_api )); then
-    printf "[pomclaw] POMERIUM_ZERO_API_TOKEN: "
+    printf "[pomclaw] Pomerium Zero API token: "
     read -r POMERIUM_ZERO_API_TOKEN || POMERIUM_ZERO_API_TOKEN=""
     if [[ -z "$POMERIUM_ZERO_API_TOKEN" ]]; then
       log_err "POMERIUM_ZERO_API_TOKEN is required."

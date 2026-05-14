@@ -833,9 +833,11 @@ cmd_bootstrap() {
   log_ok "  SSH into the gateway container with:"
   log_ok "    ssh claw@openclaw@$POMERIUM_CLUSTER_DOMAIN -p 2200"
   log_ok ""
-  log_ok "  OpenClaw $OPENCLAW_VERSION is pinned to a known-good version. To update:"
+  log_ok "  OpenClaw is pinned to $OPENCLAW_VERSION so this install is reproducible."
+  log_ok "  To try a newer version later:"
   log_ok "    1. Edit OPENCLAW_VERSION in .env"
   log_ok "    2. docker compose down && docker compose up -d"
+  log_ok "  See the OpenClaw docs for release notes."
   log_ok "================================================================"
 }
 

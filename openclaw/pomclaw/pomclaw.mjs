@@ -12,9 +12,19 @@ const PROTOCOL = 3;
 const WS_URL = process.env.POMCLAW_WS_URL ?? "ws://127.0.0.1:18789";
 const WS_TIMEOUT_MS = Number(process.env.POMCLAW_WS_TIMEOUT_MS ?? 10_000);
 
+// stdio: stderr=ignore so the openclaw CLI's warnings (e.g. "Config path
+// not found: gateway.auth.mode" on a fresh install before any config has
+// been written) don't bleed to the bootstrap script's terminal. The
+// try/catch already turns failures into empty / default returns; this just
+// completes the silence.
+const QUIET_STDIO = ["ignore", "pipe", "ignore"];
+
 function configGet(path) {
   try {
-    return execSync(`openclaw config get ${path}`, { encoding: "utf8" })
+    return execSync(`openclaw config get ${path}`, {
+      encoding: "utf8",
+      stdio: QUIET_STDIO,
+    })
       .trim()
       .replace(/^"|"$/g, "");
   } catch {
@@ -25,7 +35,10 @@ function configGet(path) {
 function devicesList() {
   try {
     return JSON.parse(
-      execSync("openclaw devices list --json", { encoding: "utf8" }),
+      execSync("openclaw devices list --json", {
+        encoding: "utf8",
+        stdio: QUIET_STDIO,
+      }),
     );
   } catch {
     return { pending: [], paired: [] };

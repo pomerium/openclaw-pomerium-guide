@@ -808,7 +808,6 @@ cmd_bootstrap() {
   else
     tp_set=no
   fi
-  log "current state: auth.mode=$mode, trustedProxy=$tp_set"
 
   if [[ "$mode" == "trusted-proxy" && "$tp_set" == "yes" ]]; then
     log_ok "already bootstrapped"

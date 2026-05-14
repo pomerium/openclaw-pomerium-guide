@@ -2,28 +2,38 @@
 # bootstrap.sh — Pomerium + OpenClaw deployment bootstrap.
 #
 # What this does:
-#   Phase 0: Generates SSH keys, sets the cluster's SSH config (host keys
-#            + User CA) in Pomerium Zero, creates the policy + SSH route +
-#            web route via the Pomerium Zero API.
-#   Phase 1: Pairs the primary operator device using token auth.
-#   Phase 2: Switches the gateway from token auth to trusted-proxy auth.
+#   Pre-bootstrap: Interactively prompts for the four required values when
+#                  .env is missing or incomplete (no-op on full .env).
+#   Phase 0:       Generates SSH keys, patches the cluster's SSH config +
+#                  jwtClaimsHeaders in Pomerium Zero, creates the policy +
+#                  SSH route + web route via the Pomerium Zero API.
+#   Phase 1:       Brings up the rest of the docker compose stack
+#                  (pomerium, verify).
+#   Phase 2:       Configures the gateway for trusted-proxy auth directly
+#                  (gateway.auth.trustedProxy + gateway.trustedProxies +
+#                  auth.mode=trusted-proxy). Replaces the older token-mode
+#                  -> WebSocket-pairing -> switch dance that broke in
+#                  OpenClaw 2026.5.7.
+#   Phase 2.5:     Prompts to pair the operator's browser device.
 #
 # Idempotent and resumable. Re-running picks up from the current state.
 #
-# Required env vars (in .env):
+# Required env vars (collected interactively if missing, or set manually
+# in .env):
 #   POMERIUM_ZERO_TOKEN       Cluster bootstrap token
 #   POMERIUM_CLUSTER_DOMAIN   e.g. fantastic-fox-1234.pomerium.app
 #   POMERIUM_ZERO_API_TOKEN   API user token; generate at:
 #                             https://console.pomerium.app/app/management/api-tokens
-#   OPERATOR_EMAIL            Email allowed by the route policy (your IdP email)
+#   OPERATOR_EMAIL            Sign-in email allowed by the route policy
 #
 # Host prereqs: docker, docker compose, ssh-keygen. (curl + jq run inside the
 # openclaw-gateway container, so the host doesn't need them.)
 #
 # Usage:
-#   ./bootstrap.sh           # bootstrap (default)
-#   ./bootstrap.sh status    # print current state, no changes
-#   ./bootstrap.sh reset     # destructive: clear devices + flip back to token mode
+#   ./bootstrap.sh                       # bootstrap (default; interactive if .env missing)
+#   ./bootstrap.sh status                # print current state, no changes
+#   ./bootstrap.sh reset                 # destructive: clear devices + flip back to token mode
+#   ./bootstrap.sh pair-browser <id> <pk>  # pair a Control UI browser device
 
 set -euo pipefail
 
@@ -97,45 +107,61 @@ require_tools() {
 
 phase_env_setup() {
   # Interactively populate .env if missing or incomplete. No-op when all four
-  # required vars are already set. Non-TTY runs error out with the same
-  # "set X, Y, Z in .env" message `require_env` would print, so CI behavior
-  # is unchanged.
+  # required vars are already set. Non-TTY runs fall through to require_env
+  # which produces the canonical "missing vars in .env" error, so CI
+  # behavior is unchanged.
   #
-  # Order of prompts:
-  #   1. POMERIUM_ZERO_API_TOKEN  -- org-scoped, needed before we can list
-  #      clusters via the API.
-  #   2. POMERIUM_CLUSTER_DOMAIN  -- derived: list clusters via the API,
-  #      auto-pick the most recent, allow override if >1.
-  #   3. POMERIUM_ZERO_TOKEN      -- cluster bootstrap token. Not fetchable
-  #      via the public API (one-time onboarding secret); user pastes it.
-  #   4. OPERATOR_EMAIL           -- email allowed by the route policy.
+  # Collect ALL values first, then write `.env` once. No API calls during
+  # prompting: the cluster bootstrap token implies the user already created
+  # the cluster, so we just ask for the four pieces in order:
+  #   1. POMERIUM_ZERO_TOKEN       -- cluster bootstrap token (proves cluster exists)
+  #   2. POMERIUM_ZERO_API_TOKEN   -- separate, org-scoped API user token
+  #   3. POMERIUM_CLUSTER_DOMAIN   -- the cluster's *.pomerium.app FQDN
+  #   4. OPERATOR_EMAIL            -- email allowed by the route policy
   if [[ -f .env ]]; then
     set -a
     # shellcheck disable=SC1091
     source .env 2>/dev/null || true
     set +a
   fi
-  local need_api=0 need_zero=0 need_domain=0 need_email=0
-  [[ -z "${POMERIUM_ZERO_API_TOKEN:-}" ]] && need_api=1
+  local need_zero=0 need_api=0 need_domain=0 need_email=0
   [[ -z "${POMERIUM_ZERO_TOKEN:-}"     ]] && need_zero=1
+  [[ -z "${POMERIUM_ZERO_API_TOKEN:-}" ]] && need_api=1
   [[ -z "${POMERIUM_CLUSTER_DOMAIN:-}" ]] && need_domain=1
   [[ -z "${OPERATOR_EMAIL:-}"          ]] && need_email=1
-  if (( need_api == 0 && need_zero == 0 && need_domain == 0 && need_email == 0 )); then
+  if (( need_zero == 0 && need_api == 0 && need_domain == 0 && need_email == 0 )); then
     return
   fi
   if [[ ! -t 0 ]]; then
     # Let require_env produce the canonical missing-vars error.
     return
   fi
-  require_tools curl jq
 
   log "==> Pre-bootstrap: collecting Pomerium Zero configuration"
   log "(you'll be prompted only for values not already in .env)"
   echo >&2
 
+  if (( need_zero )); then
+    log "1) Cluster bootstrap token (POMERIUM_ZERO_TOKEN)"
+    log "   This is the secret a Pomerium replica uses to register with the"
+    log "   management server. It was shown ONCE during cluster onboarding."
+    log "   If you didn't save it, rotate to get a new one:"
+    log "     https://console.pomerium.app/app/clusters"
+    log "     -> three-dot menu on the cluster row -> Rotate Token"
+    printf "[pomclaw] POMERIUM_ZERO_TOKEN: "
+    read -r POMERIUM_ZERO_TOKEN || POMERIUM_ZERO_TOKEN=""
+    if [[ -z "$POMERIUM_ZERO_TOKEN" ]]; then
+      log_err "POMERIUM_ZERO_TOKEN is required."
+      exit 1
+    fi
+    echo >&2
+  fi
+
   if (( need_api )); then
-    log "1) Pomerium Zero API user token (org-scoped, used only by bootstrap"
-    log "   to create the policy + routes via the Zero API):"
+    log "2) API user token (POMERIUM_ZERO_API_TOKEN)"
+    log "   DIFFERENT from the cluster bootstrap token above. This is an"
+    log "   org-scoped token used only by bootstrap to create the policy +"
+    log "   routes via the Pomerium Zero REST API. Generate one at:"
     log "     $API_TOKENS_URL"
     log "     -> Add API User -> copy the generated token"
     printf "[pomclaw] POMERIUM_ZERO_API_TOKEN: "
@@ -148,93 +174,25 @@ phase_env_setup() {
   fi
 
   if (( need_domain )); then
-    log "Authenticating to Pomerium Zero and listing your clusters..."
-    local id_token
-    id_token=$(curl -fsS -X POST "$ZERO_API/token" \
-      -H "Content-Type: application/json" \
-      -d "$(jq -n --arg t "$POMERIUM_ZERO_API_TOKEN" '{refreshToken: $t}')" \
-      | jq -r '.idToken // empty')
-    if [[ -z "$id_token" ]]; then
-      log_err "API token authentication failed. Double-check the token and re-run."
-      exit 1
-    fi
-    local org_id
-    org_id=$(curl -fsS -H "Authorization: Bearer $id_token" "$ZERO_API/organizations" \
-      | jq -r '.[0].id // empty')
-    if [[ -z "$org_id" ]]; then
-      log_err "No organizations available on this API token."
-      exit 1
-    fi
-    local clusters_json
-    clusters_json=$(curl -fsS -H "Authorization: Bearer $id_token" \
-      "$ZERO_API/organizations/$org_id/clusters")
-    local count
-    count=$(printf '%s' "$clusters_json" | jq 'length')
-    if (( count == 0 )); then
-      log_err "No clusters found in your Pomerium Zero org."
-      log_err "Create one at https://console.pomerium.app first, then re-run."
-      exit 1
-    fi
-    local sorted
-    sorted=$(printf '%s' "$clusters_json" \
-      | jq -r 'sort_by(.createdAt) | reverse | .[] | "\(.fqdn)\t\(.name)\t\(.createdAt)\t\(.onboardingStatus)"')
-    local pick=1
-    if (( count == 1 )); then
-      local fqdn name
-      fqdn=$(printf '%s' "$sorted" | head -n1 | awk -F'\t' '{print $1}')
-      name=$(printf '%s' "$sorted" | head -n1 | awk -F'\t' '{print $2}')
-      log_ok "Using cluster: $name ($fqdn)"
-      POMERIUM_CLUSTER_DOMAIN="$fqdn"
-    else
-      log ""
-      log "Found $count clusters. Most recent first; auto-selected [1]:"
-      log ""
-      local i=1
-      while IFS=$'\t' read -r fqdn name created onboarding; do
-        local mark=""
-        (( i == 1 )) && mark="  <- auto-selected"
-        printf "  [%d] %-30s %-40s  created %s  (%s)%s\n" \
-          "$i" "$name" "$fqdn" "$created" "$onboarding" "$mark" >&2
-        i=$((i+1))
-      done <<< "$sorted"
-      log ""
-      printf "[pomclaw] Enter to accept [1], or type a number: "
-      local choice
-      read -r choice || choice=""
-      if [[ -n "$choice" ]]; then
-        if [[ ! "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > count )); then
-          log_err "Invalid choice: $choice"
-          exit 1
-        fi
-        pick=$choice
-      fi
-      local row
-      row=$(printf '%s' "$sorted" | sed -n "${pick}p")
-      POMERIUM_CLUSTER_DOMAIN=$(printf '%s' "$row" | awk -F'\t' '{print $1}')
-      local name
-      name=$(printf '%s' "$row" | awk -F'\t' '{print $2}')
-      log_ok "Using cluster: $name ($POMERIUM_CLUSTER_DOMAIN)"
-    fi
-    echo >&2
-  fi
-
-  if (( need_zero )); then
-    log "2) Cluster bootstrap token (shown during cluster onboarding; not"
-    log "   recoverable via the API once dismissed -- rotate to get a new one):"
-    log "     https://console.pomerium.app/app/clusters"
-    log "     -> three-dot menu on the cluster row -> Rotate Token"
-    printf "[pomclaw] POMERIUM_ZERO_TOKEN: "
-    read -r POMERIUM_ZERO_TOKEN || POMERIUM_ZERO_TOKEN=""
-    if [[ -z "$POMERIUM_ZERO_TOKEN" ]]; then
-      log_err "POMERIUM_ZERO_TOKEN is required."
+    log "3) Cluster domain (POMERIUM_CLUSTER_DOMAIN)"
+    log "   The fully-qualified hostname of your Pomerium Zero cluster,"
+    log "   e.g. \"fantastic-fox-1234.pomerium.app\". Find it in your"
+    log "   Pomerium Zero console at https://console.pomerium.app/app/clusters"
+    log "   (the FQDN column)."
+    printf "[pomclaw] POMERIUM_CLUSTER_DOMAIN: "
+    read -r POMERIUM_CLUSTER_DOMAIN || POMERIUM_CLUSTER_DOMAIN=""
+    if [[ -z "$POMERIUM_CLUSTER_DOMAIN" ]]; then
+      log_err "POMERIUM_CLUSTER_DOMAIN is required."
       exit 1
     fi
     echo >&2
   fi
 
   if (( need_email )); then
-    log "3) Operator email -- the IdP email allowed by the route policy."
-    log "   Usually the email you used to create your Pomerium Zero account."
+    log "4) Your sign-in email (OPERATOR_EMAIL)"
+    log "   What email will you sign in to Pomerium with? Only this email"
+    log "   will be allowed through to OpenClaw -- everyone else gets denied"
+    log "   at the proxy. Usually the email on your Pomerium Zero account."
     printf "[pomclaw] OPERATOR_EMAIL: "
     read -r OPERATOR_EMAIL || OPERATOR_EMAIL=""
     if [[ -z "$OPERATOR_EMAIL" ]]; then
@@ -604,6 +562,14 @@ phase_zero_api() {
   # Bring up just the openclaw-gateway service so we can use its installed
   # curl + jq for the API calls. The rest of the stack (pomerium, verify)
   # comes up in Phase 1, after the routes are configured.
+  #
+  # `DC build` first: `docker-compose.yml` tags the service `image: openclaw:VERSION`
+  # which doesn't exist on any public registry; without an explicit build the
+  # `docker compose up` step prints a noisy "pull access denied for openclaw"
+  # warning before falling back to the build context. Building explicitly
+  # skips the pull attempt. Cached on re-runs.
+  log "Building openclaw-gateway image (cached on re-runs)"
+  DC build openclaw-gateway >/dev/null
   log "Starting openclaw-gateway (used as a JSON utility container for API setup)"
   DC up -d openclaw-gateway
   if ! wait_for "openclaw-gateway exec ready" 60 2 \

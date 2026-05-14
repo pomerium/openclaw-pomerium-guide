@@ -631,7 +631,7 @@ phase_generate_ssh_keys() {
 }
 
 phase_zero_api() {
-  log "==> Phase 0: Pomerium Zero (SSH cluster config + policy + routes)"
+  log "Configuring SSH, policy and routes"
   phase_generate_ssh_keys
 
   # Bring up just the openclaw-gateway service so we can use its installed
@@ -662,7 +662,6 @@ phase_zero_api() {
 }
 
 phase_stack_up() {
-  log "==> Phase 1: bringing up the rest of the docker compose stack"
   DC up -d
   if ! wait_for "gateway responding" 60 2 gateway_listening; then
     log_err "gateway did not come up. Run: docker compose logs openclaw-gateway"
@@ -703,7 +702,7 @@ phase_configure_trusted_proxy() {
   #     actually assigned -- works whether the compose pins
   #     ipv4_address: 172.30.0.10 or a user picked a different subnet to avoid
   #     a collision.
-  log "==> Phase 2: configuring trusted-proxy auth"
+  log "Configuring trusted-proxy auth mode"
   local pomerium_ip
   pomerium_ip=$(resolve_pomerium_replica_ip)
   log "  pomerium replica IP: $pomerium_ip"

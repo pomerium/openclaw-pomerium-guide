@@ -254,7 +254,7 @@ phase_env_setup() {
   fi
 
   if (( need_email )); then
-    printf "[pomclaw] OPERATOR_EMAIL (your sign-in email): "
+    printf "[pomclaw] email address you use to sign in to Pomerium: "
     read -r OPERATOR_EMAIL || OPERATOR_EMAIL=""
     if [[ -z "$OPERATOR_EMAIL" ]]; then
       log_err "OPERATOR_EMAIL is required."

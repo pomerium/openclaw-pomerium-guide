@@ -509,7 +509,7 @@ zero_set_cluster_settings() {
 }
 
 zero_get_or_create_policy() {
-  local name="OpenClaw allow-list ($OPERATOR_EMAIL)"
+  local name="openclaw users"
   local existing
   existing=$(zero_curl GET "/organizations/$ORG_ID/policies?namespaceId=$NAMESPACE_ID" \
     | zero_jq -r --arg n "$name" '.[]? | select(.name == $n) | .id' \

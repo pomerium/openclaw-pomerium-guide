@@ -715,19 +715,12 @@ phase_offer_token_revocation() {
   echo >&2
   log "The API token in .env isn't needed for normal operation. Revoke it"
   log "now and generate a fresh one only if you re-run bootstrap."
-  log "Manage tokens at: $API_TOKENS_URL"
+  log "You can revoke your token at: $API_TOKENS_URL"
   echo >&2
-  printf "Open the API tokens page in your browser now? [y/N]: "
+  printf "Remove API token from .env? [y/N]: "
   local answer
   read -r answer || answer=""
   if [[ "$answer" =~ ^[Yy] ]]; then
-    if command -v open >/dev/null 2>&1; then
-      open "$API_TOKENS_URL"
-    elif command -v xdg-open >/dev/null 2>&1; then
-      xdg-open "$API_TOKENS_URL" >/dev/null 2>&1 || true
-    else
-      log "open the URL manually: $API_TOKENS_URL"
-    fi
     # Strip POMERIUM_ZERO_API_TOKEN from .env so the secret doesn't linger
     # on disk after the user revokes it server-side. Re-running bootstrap
     # will then prompt for a fresh token. Idempotent: no-op if the line

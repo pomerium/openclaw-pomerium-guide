@@ -11,22 +11,26 @@ A containerized deployment of [OpenClaw](https://openclaw.ai/) behind Pomerium's
 
 ## Quick Setup
 
-Host prereqs: `docker`, `docker compose`, `ssh-keygen` (universal on macOS/Linux/WSL). The script uses `curl` and `jq` inside the gateway container, so you don't need them on the host. WSL is fine on Windows.
+Host prereqs: `docker`, `docker compose`, `git`, `ssh-keygen` (universal on macOS/Linux/WSL). The script uses `curl` and `jq` inside the gateway container, so you don't need them on the host. WSL is fine on Windows.
 
 ```bash
-git clone https://github.com/pomerium/openclaw-pomerium-guide
-cd openclaw-pomerium-guide
-
-cp .env.example .env
-# Fill in:
-#   POMERIUM_ZERO_TOKEN       — cluster bootstrap token from Pomerium Zero
-#   POMERIUM_CLUSTER_DOMAIN   — e.g. fantastic-fox-1234.pomerium.app
-#   POMERIUM_ZERO_API_TOKEN   — generate at https://console.pomerium.app/app/management/api-tokens
-#   OPERATOR_EMAIL            — your IdP email; used in the route policy
-#   OPENCLAW_VERSION          — optional, pins the OpenClaw release
-
-./bootstrap.sh
+curl -fsSL https://raw.githubusercontent.com/pomerium/openclaw-pomerium-guide/openclaw-trusted-proxy-auth/install.sh | bash
 ```
+
+This clones the repo into `./pomclaw` and runs `bootstrap.sh`. To install somewhere else, pass a path:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pomerium/openclaw-pomerium-guide/openclaw-trusted-proxy-auth/install.sh | bash -s -- ~/openclaw
+```
+
+`bootstrap.sh` then prompts for the four required values:
+
+- `POMERIUM_ZERO_TOKEN` — cluster bootstrap token from Pomerium Zero
+- `POMERIUM_ZERO_API_TOKEN` — generate at <https://console.pomerium.app/app/management/api-tokens>
+- `POMERIUM_CLUSTER_DOMAIN` — e.g. `fantastic-fox-1234.pomerium.app` (auto-detected from your Pomerium Zero clusters when the API token is set)
+- `OPERATOR_EMAIL` — your IdP email; used in the route policy
+
+The values are written to `./pomclaw/.env` (mode 600). To inspect the repo before running, clone it manually and run `./bootstrap.sh` from inside — the prompts work the same way.
 
 `./bootstrap.sh` does everything end-to-end:
 

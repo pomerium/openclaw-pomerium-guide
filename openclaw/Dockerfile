@@ -29,10 +29,6 @@ WORKDIR /claw
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# In-container helper used by the host-side ./bootstrap.sh orchestrator
-COPY pomclaw/pomclaw.mjs /opt/pomclaw/pomclaw.mjs
-RUN chmod +x /opt/pomclaw/pomclaw.mjs
-
 EXPOSE 22
 
 CMD ["/entrypoint.sh"]

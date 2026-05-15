@@ -68,7 +68,6 @@ OpenClaw is distributed as an npm package and doesn't ship a Docker image, so th
 - an SSH server that trusts the Pomerium User CA
 - git for agent operations
 - a persistent workspace mounted at `/claw/workspace`
-- the `pomclaw.mjs` helper used by `bootstrap.sh` to drive the in-container WebSocket handshake
 
 ## Gateway authentication model
 

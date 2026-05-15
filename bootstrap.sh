@@ -36,7 +36,6 @@
 
 set -euo pipefail
 
-POMCLAW_HELPER=/opt/pomclaw/pomclaw.mjs
 ZERO_API="https://console.pomerium.app/api/v0"
 API_TOKENS_URL="https://console.pomerium.app/app/management/api-tokens"
 
@@ -380,11 +379,10 @@ gateway_listening() {
   #      no `-f` flag returns 0 on ANY HTTP response (even 4xx), which is
   #      exactly what we want -- we just need to know the listener is
   #      accepting connections, not what status it returns from localhost.
-  INSIDE "node $POMCLAW_HELPER auth-mode" >/dev/null 2>&1 \
+  INSIDE "openclaw config get gateway.mode" >/dev/null 2>&1 \
     && INSIDE_ROOT curl -s --max-time 5 -o /dev/null \
                    http://127.0.0.1:18789/ >/dev/null 2>&1
 }
-helper()            { INSIDE "node $POMCLAW_HELPER $1"; }
 
 # ---- Pomerium Zero API helpers (run inside the openclaw-gateway container) ----
 #
@@ -660,14 +658,14 @@ phase_stack_up() {
 
 phase_configure_trusted_proxy() {
   # Configure trusted-proxy auth directly. This replaces the older token-mode
-  # WebSocket pairing dance (`phase_ensure_token` -> `trigger-pairing` ->
-  # `devices approve` -> `switch-to-trusted-proxy`), which broke against
-  # OpenClaw 2026.5.7: the gateway now answers the WebSocket `connect`
-  # request with a `connect.challenge` (a nonce that the client must sign
-  # with a device key) before any pending pairing is created, and the
-  # pomclaw.mjs helper doesn't implement the challenge response. Since
-  # trusted-proxy mode only needs three pieces of static config, we set them
-  # directly instead. See hiccups.md for the codepath that broke.
+  # WebSocket pairing dance (token -> trigger-pairing -> devices approve ->
+  # switch-to-trusted-proxy), which broke against OpenClaw 2026.5.7+: the
+  # gateway now answers the WebSocket `connect` request with a
+  # `connect.challenge` (a nonce that the client must sign with a device
+  # key) before any pending pairing is created. Since trusted-proxy mode
+  # only needs three pieces of static config, we set them directly and skip
+  # the WebSocket handshake entirely. See hiccups.md for the codepath that
+  # broke.
   #
   # The pieces written:
   #   - gateway.auth.trustedProxy.userHeader      : header carrying the user
@@ -755,13 +753,16 @@ cmd_status() {
     log_warn "gateway is not responding (is the stack up? \`docker compose up -d\`)"
     return 1
   fi
-  local mode ops pending
-  mode="$(helper auth-mode | tr -d '\r\n ')"
-  ops="$(helper operators-count | tr -d '\r\n ')"
-  pending="$(helper pending-count | tr -d '\r\n ')"
-  log "auth.mode:        ${mode:-unknown}"
-  log "operator devices: $ops"
-  log "pending pairings: $pending"
+  local mode tp_set
+  mode="$(INSIDE "openclaw config get gateway.auth.mode" 2>/dev/null | tr -d '"\r\n ' || true)"
+  tp_set="$(INSIDE "openclaw config get gateway.auth.trustedProxy" 2>/dev/null | tr -d '\r\n ' || true)"
+  if [[ -n "$tp_set" && "$tp_set" != "null" && "$tp_set" != "{}" ]]; then
+    tp_set=yes
+  else
+    tp_set=no
+  fi
+  log "auth.mode:    ${mode:-unknown}"
+  log "trustedProxy: $tp_set"
 }
 
 cmd_reset() {
@@ -796,12 +797,12 @@ cmd_bootstrap() {
   phase_zero_api
 
   local mode tp_set
-  mode="$(helper auth-mode | tr -d '\r\n ')"
+  # `|| true`: on a fresh install gateway.auth.mode is unset and openclaw
+  # exits non-zero -- without this, set -euo pipefail kills the script
+  # silently before phase_configure_trusted_proxy can run.
+  mode="$(INSIDE "openclaw config get gateway.auth.mode" 2>/dev/null | tr -d '"\r\n ' || true)"
   # `gateway.auth.trustedProxy` populated is the durable signal that the
-  # trusted-proxy switch has run. We don't use `operators-count` for this:
-  # the gateway self-registers a CLI operator device on startup
-  # (role=operator, scope=operator.pairing), so that count is always >=1
-  # even on a fresh state.
+  # trusted-proxy switch has run.
   tp_set="$(INSIDE "openclaw config get gateway.auth.trustedProxy" 2>/dev/null | tr -d '\r\n ' || true)"
   if [[ -n "$tp_set" && "$tp_set" != "null" && "$tp_set" != "{}" ]]; then
     tp_set=yes

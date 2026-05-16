@@ -14,13 +14,13 @@ A containerized deployment of [OpenClaw](https://openclaw.ai/) behind Pomerium's
 Host prereqs: `docker`, `docker compose`, `git`, `ssh-keygen` (universal on macOS/Linux/WSL). The script uses `curl` and `jq` inside the gateway container, so you don't need them on the host. WSL is fine on Windows.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/pomerium/openclaw-pomerium-guide/openclaw-trusted-proxy-auth/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/pomerium/openclaw-pomerium-guide/main/install.sh | bash
 ```
 
 This clones the repo into `./pomclaw` and runs `bootstrap.sh`. To install somewhere else, pass a path:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/pomerium/openclaw-pomerium-guide/openclaw-trusted-proxy-auth/install.sh | bash -s -- ~/openclaw
+curl -fsSL https://raw.githubusercontent.com/pomerium/openclaw-pomerium-guide/main/install.sh | bash -s -- ~/openclaw
 ```
 
 `bootstrap.sh` then prompts for the four required values:

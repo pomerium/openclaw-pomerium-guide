@@ -2,14 +2,16 @@
 # install.sh — one-shot installer for OpenClaw + Pomerium.
 #
 # Intended invocation:
-#   curl -fsSL https://raw.githubusercontent.com/pomerium/openclaw-pomerium-guide/openclaw-trusted-proxy-auth/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/pomerium/openclaw-pomerium-guide/main/install.sh | bash
 #
 # What it does:
 #   1. Sanity-checks that git is installed (docker + ssh-keygen are
 #      checked by bootstrap.sh once we hand off).
 #   2. Clones the repo into the target directory. Default is ./pomclaw;
-#      override by passing a path:
+#      override by passing a path. A second positional arg overrides
+#      the branch (default `main`), for testing pre-merge branches:
 #          curl ... | bash -s -- /path/to/dir
+#          curl ... | bash -s -- ./pomclaw my-feature-branch
 #   3. cd's in and hands off to bootstrap.sh, reattaching stdin to
 #      /dev/tty so bootstrap.sh's interactive prompts still work even
 #      when the installer itself was piped from curl.
@@ -20,10 +22,9 @@
 
 set -euo pipefail
 
-# TODO: flip to `main` (or a release tag) before merging to main.
 REPO_URL="https://github.com/pomerium/openclaw-pomerium-guide.git"
-REPO_BRANCH="openclaw-trusted-proxy-auth"
 TARGET_DIR="${1:-./pomclaw}"
+REPO_BRANCH="${2:-main}"
 
 log()     { printf '\033[36m[install]\033[0m %s\n' "$*" >&2; }
 log_ok()  { printf '\033[32m[install]\033[0m %s\n' "$*" >&2; }

@@ -40,8 +40,7 @@ The values are written to `./pomclaw/.env` (mode 600). To inspect the repo befor
 - creates the SSH route (`ssh://openclaw` → `ssh://openclaw-gateway:22`)
 - creates the web route (`https://openclaw.<cluster>` → `http://openclaw-gateway:18789`) with Pass Identity Headers, the `x-openclaw-scopes: operator.admin` request header, and WebSocket support
 - brings up the docker compose stack
-- pairs the primary operator device via a token-mode WebSocket handshake
-- flips the gateway to trusted-proxy auth
+- configures the gateway for trusted-proxy auth (`gateway.auth.trustedProxy`, `gateway.trustedProxies`, `auth.mode=trusted-proxy`)
 
 It's idempotent. Re-running picks up from the current state.
 
@@ -49,8 +48,8 @@ When it finishes, the script prints the URL to open OpenClaw in your browser, an
 
 ## Other commands
 
-- `./bootstrap.sh status` — print current auth mode, paired-operator count, pending-pairing count.
-- `./bootstrap.sh reset` — destructive: clear OpenClaw's paired devices, flip the gateway back to token mode, restart it. Pomerium Zero routes and policies are left in place. Use this if pairing went sideways and you need to start over.
+- `./bootstrap.sh status` — print current auth mode and whether `trustedProxy` config is set.
+- `./bootstrap.sh reset` — destructive: clear any OpenClaw device records, flip the gateway back to token mode, unset trusted-proxy config, restart it. Pomerium Zero routes and policies are left in place. Use this when you need to re-bootstrap from a clean state.
 
 ## What's included
 
@@ -71,30 +70,25 @@ OpenClaw is distributed as an npm package and doesn't ship a Docker image, so th
 
 ## Gateway authentication model
 
-The gateway ships configured for **token auth** so the bootstrap can pair the primary operator device. Once paired, `bootstrap.sh` flips the gateway to **trusted-proxy auth**, where Pomerium-asserted identity (`X-Pomerium-Claim-Email`, `X-Pomerium-Jwt-Assertion`) replaces the shared token. The paired device record then provides operator scopes for the Control UI WebSocket.
+The gateway runs in **trusted-proxy auth** end-to-end; `bootstrap.sh` writes the config directly via `openclaw config set` rather than going through a token-mode bootstrap first. Pomerium authenticates the user at the IdP, signs a JWT, and forwards both `X-Pomerium-Jwt-Assertion` and `x-pomerium-claim-email` on every request — the JWT because the route has `passIdentityHeaders: true`, and the claim header because the cluster has `jwtClaimsHeaders` mapping the `email` claim to `x-pomerium-claim-email`. The gateway reads the user identity from the claim header and refuses to honor it unless the JWT assertion is also present, so an attacker landing on the trusted-proxy IP would still need a credible Pomerium-signed JWT to spoof identity.
 
-This phased approach is necessary because OpenClaw's trusted-proxy mode is documented as an "identity-bearing HTTP mode" and rejects loopback-source requests, so the OpenClaw CLI inside the container cannot bootstrap a first device pairing while the gateway is in trusted-proxy mode (a known chicken-and-egg, see [openclaw issue #19352](https://github.com/openclaw/openclaw/issues/19352)). Token auth covers that gap; the script flips back automatically.
+`gateway.trustedProxies` is set to the live IP of the `pomerium` container (resolved at bootstrap from `docker inspect`, so it reflects whatever Docker actually assigned rather than a hard-coded address). The route also injects `x-openclaw-scopes: operator.admin`, and Pomerium's route policy is the single source of truth for *who* can reach the gateway — `bootstrap.sh` creates an allow-by-email policy keyed on `OPERATOR_EMAIL`.
 
-The Control UI WebSocket inherits scopes from the operator's paired device record, **not** from the `x-openclaw-scopes` header (see [openclaw issue #18560](https://github.com/openclaw/openclaw/issues/18560)). After Phase 2 of bootstrap, additional Control UI sessions from new browsers or devices that sign in as the same Pomerium-authenticated user typically just work without a separate pairing approval (see ["Control UI Pairing Behavior" in the OpenClaw trusted-proxy doc](https://docs.openclaw.ai/gateway/trusted-proxy-auth#control-ui-pairing-behavior)).
-
-A note on auto-approved devices: when a *new* device pairing record is created in trusted-proxy mode (a different Pomerium identity, or a non-CUI client), the auto-approval grants only `operator.pairing`. The first time that device tries an operation requiring broader scope, OpenClaw queues a separate **scope-upgrade** pairing request; approving it with `openclaw devices approve <scope-upgrade-request-id>` widens the device record without a re-pair. See [OpenClaw operator scopes](https://docs.openclaw.ai/gateway/operator-scopes). For a single-operator deployment the bootstrap pairing already holds `operator.admin`, so this only matters when adding distinct device records for non-CUI clients or a second human operator.
-
-> [!IMPORTANT]
-> Don't `openclaw devices remove` the bootstrap pairing record. It's the durable source of operator scopes for every Control UI session in trusted-proxy mode. If you wipe `./openclaw-data/` or remove the pairing, the Control UI regresses to empty scopes and you'll need to re-bootstrap. Pair a second operator device first if you ever need to rotate.
+Earlier iterations of this guide did a token-mode device pairing first and flipped the gateway to trusted-proxy afterward, because trusted-proxy mode rejected loopback-source requests during a first device pairing. OpenClaw 2026.5.7+ changed the WebSocket pairing handshake that step depended on, so the bootstrap now skips device pairing entirely. See the [OpenClaw trusted-proxy docs](https://docs.openclaw.ai/gateway/trusted-proxy-auth) for the current runtime behavior model.
 
 ## What the script does for you in Pomerium Zero
 
 The Pomerium Zero pieces `bootstrap.sh` configures via the API:
 
-- **Cluster SSH settings**: `sshAddress`, `sshHostKeys` (the three private host keys), `sshUserCaKey`. These are the values that would otherwise be pasted into Pomerium Zero's "Global SSH Settings" page during the first Guided SSH Route flow.
-- **A policy** named `OpenClaw allow-list (<OPERATOR_EMAIL>)` that allows the configured email.
+- **Cluster settings**: `sshAddress`, `sshHostKeys` (the three private host keys), `sshUserCaKey`, plus `jwtClaimsHeaders` mapping the `email` claim to the `x-pomerium-claim-email` header that trusted-proxy auth keys on. The SSH bits are what would otherwise be pasted into Pomerium Zero's "Global SSH Settings" page during the first Guided SSH Route flow.
+- **A policy** named `openclaw users` that allows the configured `OPERATOR_EMAIL`.
 - **The SSH route** `ssh://openclaw` → `ssh://openclaw-gateway:22` with that policy attached.
 - **The web route** `https://openclaw.<cluster>.pomerium.app` → `http://openclaw-gateway:18789` with that policy attached, plus:
   - `passIdentityHeaders: true`
   - `setRequestHeaders: { "x-openclaw-scopes": "operator.admin" }`
   - `allowWebsockets: true`
 
-If any of those resources already exist (matched by name for policies, by `from` URL for routes), the script skips creating them. Settings are PATCHed, so re-running with new keys just overwrites. `./bootstrap.sh reset` does **not** touch Pomerium Zero state — it only resets OpenClaw's local pairing/auth-mode state.
+If any of those resources already exist (matched by name for policies, by `from` URL for routes), the script skips creating them. Settings are PATCHed, so re-running with new keys just overwrites. `./bootstrap.sh reset` does **not** touch Pomerium Zero state — it only resets the gateway container's local auth state.
 
 ## API token least privilege
 

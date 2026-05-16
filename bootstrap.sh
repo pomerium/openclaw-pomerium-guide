@@ -559,8 +559,6 @@ zero_get_or_create_route() {
   # (web=true, ssh=false). It used to live here, but jq object construction
   # is last-write-wins, so an earlier `allowWebsockets: true` in the route
   # body was being silently clobbered by this block when it expanded after.
-  # See hiccups #5 (Zero API required-fields list) and the websocket entry
-  # for the regression that resurfaced this.
   local common_fields='
     allowSpdy: false,
     enableGoogleCloudServerlessAuthentication: false,
@@ -664,8 +662,7 @@ phase_configure_trusted_proxy() {
   # `connect.challenge` (a nonce that the client must sign with a device
   # key) before any pending pairing is created. Since trusted-proxy mode
   # only needs three pieces of static config, we set them directly and skip
-  # the WebSocket handshake entirely. See hiccups.md for the codepath that
-  # broke.
+  # the WebSocket handshake entirely.
   #
   # The pieces written:
   #   - gateway.auth.trustedProxy.userHeader      : header carrying the user
